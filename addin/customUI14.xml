@@ -1,0 +1,14 @@
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+  <ribbon>
+    <tabs>
+      <tab idMso="TabHome">
+        <group id="PopiskyGrafu" label="Popisky grafu">
+          <button id="RozmistitPopisky" label="Rozmístit popisky" size="large" imageMso="{IKONA}"
+                  screentip="Rozmístit popisky v XY grafech"
+                  supertip="Vytvoří kopii prezentace s rozmístěnými popisky ve všech XY grafech a otevře ji. Původní prezentace zůstane beze změny."
+                  onAction="RozmistiPopiskyTlacitko"/>
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>
