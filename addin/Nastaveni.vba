@@ -1,13 +1,15 @@
 Option Explicit
 
-' Dialog before placement: which slides and which placement (approved on 9 Oct 2026). The controls are created
-' at run time; the build (doplnek/sestav_doplnek.py) only puts this code into an empty UserForm named Nastaveni.
+' Dialog before placement: which slides, which placement (approved on 9 Oct 2026) and where the result goes
+' (approved on 10 Oct 2026). The controls are created at run time; the build (doplnek/sestav_doplnek.py) only
+' puts this code into an empty UserForm named Nastaveni.
 ' Czech text in string literals goes through ChrW at build time.
-' Use: Priprav, Show (modal), read Ok, Styl and Snimky, Unload.
+' Use: Priprav, Show (modal), read Ok, Styl, Snimky and Kam, Unload.
 
 Public Ok As Boolean
 Public Styl As String          ' STYL_SLOUPCE or STYL_KRATSI
 Public Snimky As String        ' "" = all slides, otherwise a normalized list such as "2,5,6,7"
+Public Kam As String           ' KAM_KOPIE or KAM_OTEVRENA
 
 Private mPocet As Long
 Private mVybrane As String
@@ -19,18 +21,22 @@ Private WithEvents mCislaOpt As MSForms.OptionButton
 Private WithEvents mCisla As MSForms.TextBox
 Private mSloupce As MSForms.OptionButton
 Private mKratsi As MSForms.OptionButton
+Private mKopie As MSForms.OptionButton
+Private mOtevrena As MSForms.OptionButton
 Private WithEvents mOk As MSForms.CommandButton
 Private WithEvents mZrusit As MSForms.CommandButton
 
 ' pocet = slides in the presentation, vybrane = slides selected in PowerPoint (normalized list, "" = none),
-' zMiniatur = the selection is in the slide thumbnails, styl = the placement chosen last time.
-Public Sub Priprav(ByVal pocet As Long, ByVal vybrane As String, ByVal zMiniatur As Boolean, ByVal styl As String)
+' zMiniatur = the selection is in the slide thumbnails, styl = the placement chosen last time,
+' kamMinule = the result chosen last time.
+Public Sub Priprav(ByVal pocet As Long, ByVal vybrane As String, ByVal zMiniatur As Boolean, ByVal styl As String, _
+                   ByVal kamMinule As String)
     Dim popis As String, n As Long
     mPocet = pocet
     mVybrane = vybrane
     Me.Caption = "Rozmístit popisky"
     Me.Width = 296
-    Me.Height = 232
+    Me.Height = 300
     Nadpis "Které snímky", 12, 10
     Set mVse = Volba("Všechny snímky", "V", "Snimky", 18, 28, 260)
     Set mVybraneOpt = Volba("Vybrané snímky", "B", "Snimky", 18, 48, 260)
@@ -40,12 +46,15 @@ Public Sub Priprav(ByVal pocet As Long, ByVal vybrane As String, ByVal zMiniatur
     Nadpis "Rozmístění", 12, 98
     Set mSloupce = Volba("Zarovnané sloupce", "Z", "Styl", 18, 116, 260)
     Set mKratsi = Volba("Kratší čáry (zkušební)", "K", "Styl", 18, 136, 260)
+    Nadpis "Výsledek", 12, 166
+    Set mKopie = Volba("Nová prezentace vedle původní (název-popisky.pptx)", "N", "Kam", 18, 184, 260)
+    Set mOtevrena = Volba("Upravit otevřenou prezentaci", "U", "Kam", 18, 204, 260)
     Set mOk = Me.Controls.Add("Forms.CommandButton.1")
-    Umisti mOk, 124, 168, 74, 24
+    Umisti mOk, 124, 236, 74, 24
     mOk.Caption = "Rozmístit"
     mOk.Default = True
     Set mZrusit = Me.Controls.Add("Forms.CommandButton.1")
-    Umisti mZrusit, 206, 168, 74, 24
+    Umisti mZrusit, 206, 236, 74, 24
     mZrusit.Caption = "Zrušit"
     mZrusit.Cancel = True
 
@@ -64,6 +73,7 @@ Public Sub Priprav(ByVal pocet As Long, ByVal vybrane As String, ByVal zMiniatur
     End If
     If zMiniatur And n >= 2 Then mVybraneOpt.Value = True Else mVse.Value = True
     If styl = STYL_KRATSI Then mKratsi.Value = True Else mSloupce.Value = True
+    If kamMinule = KAM_OTEVRENA Then mOtevrena.Value = True Else mKopie.Value = True
     mPripraveno = True
 End Sub
 
@@ -121,6 +131,7 @@ Private Sub mOk_Click()
         Snimky = ""
     End If
     If mKratsi.Value Then Styl = STYL_KRATSI Else Styl = STYL_SLOUPCE
+    If mOtevrena.Value Then Kam = KAM_OTEVRENA Else Kam = KAM_KOPIE
     Ok = True
     Me.Hide
 End Sub

@@ -1,24 +1,32 @@
 Option Explicit
 
-' Ribbon button "Rozmistit popisky": asks which slides and which placement (dialog Nastaveni), saves a copy of
-' the open presentation (including unsaved changes) next to the original, places the data labels in the XY charts
-' of the chosen slides of the copy and opens it. The original is not changed.
+' Ribbon button "Rozmistit popisky": asks which slides, which placement and where the result goes (dialog
+' Nastaveni). By default it saves a copy of the open presentation (including unsaved changes) next to the
+' original, places the data labels in the XY charts of the chosen slides of the copy and opens it; the original
+' is not changed. With "Upravit otevrenou prezentaci" it places the labels in the open presentation itself and
+' leaves saving to the user.
 ' Everything runs inside PowerPoint (modules Graf, Rozlozeni, Blizko, Pisma), no external program.
-' ZpracujSoubor is the entry point for tests (tests/test_vba.py): processes a file without a window and returns
-' the results as JSON.
+' ZpracujSoubor and ZpracujOtevrenou are the entry points for tests (tests/test_vba.py): they process a file
+' without a window, or an open presentation, and return the results as JSON.
 ' Czech text in string literals is converted to ChrW by sestav_doplnek.py (VBA source is in the system code page).
 
 Private Declare PtrSafe Function MessageBoxW Lib "user32" (ByVal hWnd As LongPtr, ByVal lpText As LongPtr, _
     ByVal lpCaption As LongPtr, ByVal uType As Long) As Long
 Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (ByRef Destination As Any, ByRef Source As Any, ByVal Length As LongPtr)
 
-Private Const VERZE As String = "0.3.0"
+Private Const VERZE As String = "0.6.0"
 Private Const NAZEV_DOPLNKU As String = "RozmistiPopisky"
 Private Const PRIPONA As String = "-popisky"
+Private Const PRIPONA_PREHLEDU As String = "-kontrola.html"
 Private Const PP_PPTX As Long = 24
+Private Const PP_PPTM As Long = 25                 ' ppSaveAsOpenXMLPresentationMacroEnabled
+Private Const PP_PPT As Long = 1                   ' ppSaveAsPresentation
+Private Const POCET_ZALOH As Long = 3
 Private Const ZNACKA_PRESKOCIT As String = "#popisky-ne"
 Public Const STYL_SLOUPCE As String = "sloupce"   ' aligned columns (approved 8 Oct 2026)
 Public Const STYL_KRATSI As String = "kratsi"     ' shorter leader lines (module Blizko)
+Public Const KAM_KOPIE As String = "kopie"        ' result: a new presentation next to the original (default)
+Public Const KAM_OTEVRENA As String = "otevrena"  ' result: the open presentation itself (approved 10 Oct 2026)
 Private Const PP_VYBER_SNIMKU As Long = 1          ' ppSelectionSlides
 Private Const MB_SETFOREGROUND As Long = &H10000
 
@@ -37,6 +45,7 @@ Private Type Vysledek
     Geometrie As String
     Cas As Double            ' seconds spent by the placement
     Model As String          ' JSON model for the parity test of the shorter-lines placement
+    Predupraveno As Boolean  ' the font size or the axis ranges were changed (module Predupravy)
 End Type
 
 Private mV() As Vysledek
@@ -47,30 +56,39 @@ Public Sub RozmistiPopiskyTlacitko(control As IRibbonControl)
 End Sub
 
 Public Sub RozmistiPopisky()
-    Dim pres As Presentation, kopie As Presentation, fso As Object, styl As String, snimky As String
-    Dim prac As String, zaklad As String, vystup As String, prehled As String, kod As Long, popis As String
+    Dim pres As Presentation, kopie As Presentation, styl As String, snimky As String, kam As String
+    Dim prac As String, vystup As String, prehled As String, kod As Long, popis As String, zaloha As String
+    Dim hotovo As String
     On Error GoTo Chyba
     If Presentations.Count = 0 Then
         Zprava "Nejdřív otevři prezentaci, ve které chceš rozmístit popisky.", vbExclamation
         Exit Sub
     End If
     Set pres = ActivePresentation
-    If Not ZeptejSe(pres, styl, snimky) Then Exit Sub
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    prac = Environ$("TEMP") & "\" & NAZEV_DOPLNKU
-    If Not fso.FolderExists(prac) Then fso.CreateFolder prac
+    If Not ZeptejSe(pres, styl, snimky, kam) Then Exit Sub
+    prac = PracovniSlozka()
 
-    zaklad = ZakladNazvu(pres.Name)
-    vystup = CilovaCesta(pres, zaklad, prac)
-    prehled = Left$(vystup, Len(vystup) - 5) & "-kontrola.html"
-    pres.SaveCopyAs vystup, PP_PPTX
-    Set kopie = Presentations.Open(vystup, msoFalse, msoFalse, msoFalse)
-    kod = Zpracuj(kopie, True, styl, snimky)
+    If kam = KAM_OTEVRENA Then
+        kod = UpravOtevrenou(pres, styl, snimky, prac, prehled, zaloha)
+    Else
+        vystup = CilovaCesta(pres, ZakladNazvu(pres.Name), prac)
+        prehled = Left$(vystup, Len(vystup) - 5) & PRIPONA_PREHLEDU
+        pres.SaveCopyAs vystup, PP_PPTX
+        Set kopie = Presentations.Open(vystup, msoFalse, msoFalse, msoFalse)
+        kod = Zpracuj(kopie, True, styl, snimky, True)
+        If kod = 2 Then
+            kopie.Saved = msoTrue
+            kopie.Close
+            Set kopie = Nothing
+            CreateObject("Scripting.FileSystemObject").DeleteFile vystup
+        Else
+            kopie.Save
+            kopie.Close
+            Set kopie = Nothing
+            NapisPrehled prehled, pres.Name, vystup, "", styl, snimky
+        End If
+    End If
     If kod = 2 Then
-        kopie.Saved = msoTrue
-        kopie.Close
-        Set kopie = Nothing
-        fso.DeleteFile vystup
         If snimky = "" Then
             Zprava "V prezentaci není žádný XY graf s popisky z buněk, nic se neměnilo.", vbInformation
         Else
@@ -78,14 +96,16 @@ Public Sub RozmistiPopisky()
         End If
         Exit Sub
     End If
-    kopie.Save
-    kopie.Close
-    Set kopie = Nothing
-    NapisPrehled prehled, pres.Name, vystup, "", styl, snimky
-    Presentations.Open vystup
+    If kam <> KAM_OTEVRENA Then Presentations.Open vystup
     If kod = 3 Then
-        Zprava "Některé grafy zůstaly beze změny nebo je potřeba je zkontrolovat. Přehled se otevře v prohlížeči.", vbInformation
+        hotovo = "Některé grafy zůstaly beze změny nebo je potřeba je zkontrolovat. Přehled se otevře v prohlížeči."
+        If zaloha <> "" Then hotovo = hotovo & vbLf & vbLf & "Záloha stavu před úpravou: " & zaloha
+        Zprava hotovo, vbInformation
         OtevriSoubor prehled
+    ElseIf kam = KAM_OTEVRENA Then  ' no new window opens, so say that it is done
+        hotovo = "Popisky jsou rozmístěné přímo v otevřené prezentaci (upraveno grafů: " & PocetUpravenych(False)
+        If PocetUpravenych(True) > 0 Then hotovo = hotovo & ", z toho s předúpravou písma nebo os: " & PocetUpravenych(True)
+        Zprava hotovo & "). Prezentaci nástroj neukládá." & vbLf & vbLf & "Záloha stavu před úpravou: " & zaloha, vbInformation
     End If
     Exit Sub
 Chyba:
@@ -96,26 +116,113 @@ Chyba:
         kopie.Close
     End If
     If prehled <> "" Then
-        NapisPrehled prehled, pres.Name, vystup, popis, styl, snimky
+        NapisPrehled prehled, pres.Name, vystup, popis, styl, snimky, zaloha
         OtevriSoubor prehled
+        If kam = KAM_OTEVRENA Then
+            popis = popis & vbLf & vbLf & "Část grafů už může být upravená, přehled je vyjmenuje. Záloha stavu před úpravou: " & zaloha
+        End If
     End If
     Zprava "Rozmístění se nepovedlo: " & popis, vbExclamation
 End Sub
 
-' Dialog before placement; False = cancelled. The placement style is remembered for the next run.
-Private Function ZeptejSe(pres As Presentation, ByRef styl As String, ByRef snimky As String) As Boolean
+' Dialog before placement; False = cancelled. The placement style and the result are remembered for the next run.
+Private Function ZeptejSe(pres As Presentation, ByRef styl As String, ByRef snimky As String, ByRef kam As String) As Boolean
     Dim f As Nastaveni, vybrane As String, zMiniatur As Boolean
     vybrane = VybraneSnimky(pres, zMiniatur)
     Set f = New Nastaveni
-    f.Priprav pres.Slides.Count, vybrane, zMiniatur, GetSetting(NAZEV_DOPLNKU, "Nastaveni", "Styl", STYL_SLOUPCE)
+    f.Priprav pres.Slides.Count, vybrane, zMiniatur, GetSetting(NAZEV_DOPLNKU, "Nastaveni", "Styl", STYL_SLOUPCE), _
+        GetSetting(NAZEV_DOPLNKU, "Nastaveni", "Vysledek", KAM_KOPIE)
     f.Show
     If f.Ok Then
         styl = f.Styl
         snimky = f.Snimky
+        kam = f.Kam
         SaveSetting NAZEV_DOPLNKU, "Nastaveni", "Styl", styl
+        SaveSetting NAZEV_DOPLNKU, "Nastaveni", "Vysledek", kam
         ZeptejSe = True
     End If
     Unload f
+End Function
+
+' Places the labels in the open presentation itself: no copy, and the presentation is not saved. First it saves a
+' backup to the work folder (zaloha; an error there means nothing was touched). The check report goes next to
+' the presentation (name-kontrola.html), or to the work folder when the presentation has no local folder or the
+' folder cannot be written to; prehled is set before the charts are touched. Returns the code of Zpracuj.
+Private Function UpravOtevrenou(pres As Presentation, ByVal styl As String, ByVal snimky As String, ByVal prac As String, _
+                                ByRef prehled As String, ByRef zaloha As String, _
+                                Optional ByVal predupravy As Boolean = True) As Long
+    Dim jmeno As String
+    jmeno = pres.Name
+    If InStrRev(jmeno, ".") > 0 Then jmeno = Left$(jmeno, InStrRev(jmeno, ".") - 1)
+    zaloha = ZalohujOtevrenou(pres, prac, jmeno)
+    jmeno = jmeno & PRIPONA_PREHLEDU
+    prehled = SlozkaVystupu(pres, prac) & "\" & jmeno
+    UpravOtevrenou = Zpracuj(pres, True, styl, snimky, predupravy)
+    If UpravOtevrenou = 2 Then  ' nothing was changed, so there is nothing to go back to
+        On Error Resume Next
+        CreateObject("Scripting.FileSystemObject").DeleteFile zaloha
+        zaloha = ""
+        Exit Function
+    End If
+    On Error Resume Next
+    NapisPrehled prehled, pres.Name, "", "", styl, snimky, zaloha
+    If Err.Number = 0 Then Exit Function
+    On Error GoTo 0
+    prehled = prac & "\" & jmeno
+    NapisPrehled prehled, pres.Name, "", "", styl, snimky, zaloha
+End Function
+
+' Backup of the open presentation before it is edited in place: name-zaloha-yyyymmdd-hhnnss in the work folder,
+' in the format of the presentation. The POCET_ZALOH newest backups of a presentation are kept.
+Private Function ZalohujOtevrenou(pres As Presentation, ByVal prac As String, ByVal jmeno As String) As String
+    Dim konc As String, typ As Long, zaklad As String, fso As Object, f As Object, stare() As String
+    Dim n As Long, i As Long, j As Long, s As String
+    typ = PP_PPTX
+    konc = "pptx"
+    If InStrRev(pres.Name, ".") > 0 Then
+        Select Case LCase$(Mid$(pres.Name, InStrRev(pres.Name, ".") + 1))
+            Case "pptm"
+                typ = PP_PPTM
+                konc = "pptm"
+            Case "ppt"
+                typ = PP_PPT
+                konc = "ppt"
+        End Select
+    End If
+    zaklad = jmeno & "-zaloha-"
+    ZalohujOtevrenou = prac & "\" & zaklad & Format$(Now, "yyyymmdd-hhnnss") & "." & konc
+    pres.SaveCopyAs ZalohujOtevrenou, typ
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    ReDim stare(0 To 0)  ' backups of this presentation, newest first (the time stamp sorts as text)
+    For Each f In fso.GetFolder(prac).Files
+        If StrComp(Left$(f.Name, Len(zaklad)), zaklad, vbTextCompare) = 0 Then
+            n = n + 1
+            ReDim Preserve stare(0 To n)
+            s = f.Name
+            j = n - 1
+            Do While j >= 1
+                If StrComp(stare(j), s, vbTextCompare) < 0 Then
+                    stare(j + 1) = stare(j)
+                    j = j - 1
+                Else
+                    Exit Do
+                End If
+            Loop
+            stare(j + 1) = s
+        End If
+    Next f
+    On Error Resume Next  ' a backup that is open stays
+    For i = POCET_ZALOH + 1 To n
+        fso.DeleteFile prac & "\" & stare(i)
+    Next i
+End Function
+
+Private Function PocetUpravenych(ByVal jenPredupravene As Boolean) As Long
+    Dim i As Long
+    For i = 1 To PocetVysledku()
+        If mV(i).Stav = "upraveno" And (mV(i).Predupraveno Or Not jenPredupravene) Then PocetUpravenych = PocetUpravenych + 1
+    Next i
 End Function
 
 ' Slides selected in the active window of the presentation as a normalized list ("" = none);
@@ -137,10 +244,10 @@ End Function
 
 ' ---------- entry point for tests ----------
 ' Processes a file without a window: upravit = place the labels and save in place, otherwise only count
-' the defects. styl = STYL_SLOUPCE or STYL_KRATSI, snimky = slide numbers as typed in the dialog ("" = all).
-' Returns JSON.
+' the defects. styl = STYL_SLOUPCE or STYL_KRATSI, snimky = slide numbers as typed in the dialog ("" = all),
+' predupravy = False switches the pre-adjustment off (the button always has it on). Returns JSON.
 Public Function ZpracujSoubor(ByVal cesta As String, ByVal upravit As Boolean, Optional ByVal styl As String = STYL_SLOUPCE, _
-                              Optional ByVal snimky As String = "") As String
+                              Optional ByVal snimky As String = "", Optional ByVal predupravy As Boolean = True) As String
     Dim pres As Presentation, popis As String, chyba As String
     On Error GoTo Chyba
     If styl <> STYL_SLOUPCE And styl <> STYL_KRATSI Then Err.Raise vbObjectError + 1, , "neznámý styl rozmístění: " & styl
@@ -150,7 +257,7 @@ Public Function ZpracujSoubor(ByVal cesta As String, ByVal upravit As Boolean, O
         snimky = RozsahSnimku(snimky, pres.Slides.Count, chyba)
         If chyba <> "" Then Err.Raise vbObjectError + 2, , chyba
     End If
-    Zpracuj pres, upravit, styl, snimky
+    Zpracuj pres, upravit, styl, snimky, predupravy
     If upravit Then pres.Save
     pres.Close
     ZpracujSoubor = VysledkyJson()
@@ -165,10 +272,38 @@ Chyba:
     ZpracujSoubor = "{""chyba"":" & TextJson(popis) & "}"
 End Function
 
+' The "Upravit otevrenou prezentaci" path of the button without the dialog and the messages. cesta = full name
+' of a presentation that is already open; styl, snimky and predupravy as in ZpracujSoubor.
+' Returns JSON {"kod": code of Zpracuj, "prehled": path of the check report, "zaloha": path of the backup,
+' "vysledky": [...]}.
+Public Function ZpracujOtevrenou(ByVal cesta As String, Optional ByVal styl As String = STYL_SLOUPCE, _
+                                 Optional ByVal snimky As String = "", Optional ByVal predupravy As Boolean = True) As String
+    Dim pres As Presentation, p As Presentation, prehled As String, kod As Long, chyba As String, zaloha As String
+    On Error GoTo Chyba
+    If styl <> STYL_SLOUPCE And styl <> STYL_KRATSI Then Err.Raise vbObjectError + 1, , "neznámý styl rozmístění: " & styl
+    cesta = Replace(cesta, "/", "\")
+    For Each p In Presentations
+        If StrComp(p.FullName, cesta, vbTextCompare) = 0 Then Set pres = p
+    Next p
+    If pres Is Nothing Then Err.Raise vbObjectError + 3, , "prezentace není otevřená: " & cesta
+    If snimky <> "" Then
+        snimky = RozsahSnimku(snimky, pres.Slides.Count, chyba)
+        If chyba <> "" Then Err.Raise vbObjectError + 2, , chyba
+    End If
+    kod = UpravOtevrenou(pres, styl, snimky, PracovniSlozka(), prehled, zaloha, predupravy)
+    ZpracujOtevrenou = "{""kod"":" & kod & ",""prehled"":" & TextJson(prehled) & ",""zaloha"":" & TextJson(zaloha) & _
+        ",""vysledky"":" & VysledkyJson() & "}"
+    Exit Function
+Chyba:
+    ZpracujOtevrenou = "{""chyba"":" & TextJson(Err.Description) & "}"
+End Function
+
 ' ---------- processing ----------
-' Only the slides in snimky (normalized list, "" = all). Returns 0 all charts processed, 2 no suitable chart,
-' 3 some charts unchanged, skipped or with a warning.
-Private Function Zpracuj(pres As Presentation, ByVal upravit As Boolean, ByVal styl As String, ByVal snimky As String) As Long
+' Only the slides in snimky (normalized list, "" = all); predupravy = a chart whose placement has defects may get
+' a smaller font and wider axis ranges. Returns 0 all charts processed, 2 no suitable chart, 3 some charts
+' unchanged, skipped or with a warning.
+Private Function Zpracuj(pres As Presentation, ByVal upravit As Boolean, ByVal styl As String, ByVal snimky As String, _
+                         ByVal predupravy As Boolean) As Long
     Dim sl As Slide, grafy As Collection, shp As Shape, preskocit As Boolean, i As Long, cast As Variant
     Dim cislo As Long, popis As String, vybrano() As Boolean
     ReDim mV(0 To 0)
@@ -189,7 +324,7 @@ Private Function Zpracuj(pres As Presentation, ByVal upravit As Boolean, ByVal s
                 NactiTvary sl
                 preskocit = MaZnacku(sl)
                 For Each shp In grafy
-                    If MaXYSerii(shp.Chart) Then ZpracujGraf sl, shp, preskocit, upravit, styl
+                    If MaXYSerii(shp.Chart) Then ZpracujGraf sl, shp, preskocit, upravit, styl, predupravy
                 Next shp
             End If
         End If
@@ -210,14 +345,19 @@ Chyba:
     Err.Raise cislo, , popis
 End Function
 
-Private Sub ZpracujGraf(sl As Slide, shp As Shape, ByVal preskocit As Boolean, ByVal upravit As Boolean, ByVal styl As String)
+Private Sub ZpracujGraf(sl As Slide, shp As Shape, ByVal preskocit As Boolean, ByVal upravit As Boolean, ByVal styl As String, _
+                        ByVal predupravy As Boolean)
     Dim v As Vysledek, duvod As String, i As Long, zmeneno As Long, velikost As Double, mezera As Double
     Dim nesedi As Long, poznamky As String, nahradni As String, zacatek As Single, startL() As Double, startT() As Double
     Dim puvL() As Double, puvT() As Double, puvW() As Double, puvH() As Double, nouze As Boolean, nevesly As String
-    Dim startW() As Double, startH() As Double
+    Dim startW() As Double, startH() As Double, bezVad As Boolean, pricka As Long, k As Long, zkus As Double
+    Dim vraceno As Boolean, puvPismo As Double
     v.CisloSlidu = sl.SlideIndex
     v.Jmeno = shp.Name
+    gStaraOsa = False
+    If upravit And Not preskocit Then vraceno = VratOsy(shp)  ' before reading: the chart with its own axis ranges
     duvod = NactiGraf(sl, shp)
+    gStaraOsa = False
     If duvod <> "" Then  ' a chart the tool cannot handle is left as it is
         v.Stav = "přeskočeno"
         v.Poznamka = duvod
@@ -247,22 +387,35 @@ Private Sub ZpracujGraf(sl As Slide, shp As Shape, ByVal preskocit As Boolean, B
         Next i
         velikost = SjednotPismo(zmeneno)
         If zmeneno > 0 Then poznamky = "písmo sjednoceno na " & CStr(velikost) & " pt (změněno " & zmeneno & " popisků)"
-        zacatek = Timer
-        mezera = Rozmisti()
-        ReDim startL(1 To UBound(gP))
-        ReDim startT(1 To UBound(gP))
-        ReDim startW(1 To UBound(gP))  ' single-line sizes the placement works with (model for the parity test)
-        ReDim startH(1 To UBound(gP))
-        For i = 1 To UBound(gP)
-            startW(i) = gP(i).W
-            startH(i) = gP(i).H
-        Next i
-        If mezera >= 0 And styl = STYL_KRATSI Then
+        puvPismo = PismoPredUpravou(shp, velikost)
+        If puvPismo > 0 Then  ' an earlier run made the font smaller: start from the size before it
             For i = 1 To UBound(gP)
-                startL(i) = gP(i).L
-                startT(i) = gP(i).T
+                gP(i).Fs = puvPismo
             Next i
-            ZlepsiBlizko mezera
+            velikost = puvPismo
+            vraceno = True
+        End If
+        zacatek = Timer
+        mezera = Pokus(styl, False, startL, startT, startW, startH, bezVad)
+        If Not bezVad And predupravy Then
+            If MuzeZnacit(shp) Then  ' the first rung of the ladder that comes out without defects
+                ZapamatujZaklad
+                For k = 1 To PostavZebrik()
+                    PouzijPricku k
+                    zkus = Pokus(styl, True, startL, startT, startW, startH, bezVad)
+                    If bezVad Then
+                        pricka = k
+                        mezera = zkus
+                        Exit For
+                    End If
+                Next k
+                If pricka = 0 Then  ' no rung helps: the chart as it is
+                    PouzijPricku 0
+                    mezera = Pokus(styl, False, startL, startT, startW, startH, bezVad)
+                End If
+            End If
+        End If
+        If mezera >= 0 And styl = STYL_KRATSI Then
             v.Model = ModelJson(mezera, startL, startT, startW, startH, False, puvL, puvT, puvW, puvH)
         ElseIf mezera < 0 Then  ' the columns do not fit: fallback placement (both options)
             nouze = True
@@ -274,6 +427,7 @@ Private Sub ZpracujGraf(sl As Slide, shp As Shape, ByVal preskocit As Boolean, B
             v.Stav = "beze změny"
             v.Poznamka = "popisky se do grafu nevejdou, doladit ručně"
         Else
+            ZapisPredupravu shp, pricka, velikost  ' before the labels: they are placed against the new axis ranges
             nesedi = ZapisGraf(shp)
             v.Po = SpocitejVady()
             v.MaPo = True
@@ -281,6 +435,12 @@ Private Sub ZpracujGraf(sl As Slide, shp As Shape, ByVal preskocit As Boolean, B
                 If gP(i).Rezim = "D" Then v.Primo = v.Primo + 1
             Next i
             v.Stav = "upraveno"
+            If pricka > 0 Then
+                poznamky = Pripoj(poznamky, PopisPricky(pricka, velikost))
+                v.Predupraveno = True
+            ElseIf vraceno Then
+                poznamky = Pripoj(poznamky, "předúprava z minulého běhu vrácena")
+            End If
             If nouze Then poznamky = Pripoj(poznamky, "sloupce se nevešly, popisky rozmístěny blíž k bodům")
             If mezera < 1.5 Then poznamky = Pripoj(poznamky, "málo místa, popisky těsněji u sebe")
             For i = 1 To UBound(gP)
@@ -304,6 +464,36 @@ Private Sub ZpracujGraf(sl As Slide, shp As Shape, ByVal preskocit As Boolean, B
     If nahradni <> "" Then v.Poznamka = Pripoj(v.Poznamka, "písmo " & nahradni & " chybí, měřeno náhradním")
     PridejVysledek v
 End Sub
+
+' One placement of the model as it is: the columns, then the shorter lines for STYL_KRATSI. Returns the gap of the
+' columns (-1 = they do not fit; jenPlna = only the full gap counts); bezVad = it fits and has no defects.
+' startW/startH get the single-line sizes the placement works with and startL/startT the column start (the model
+' for the parity test of the shorter lines).
+Private Function Pokus(ByVal styl As String, ByVal jenPlna As Boolean, startL() As Double, startT() As Double, _
+                       startW() As Double, startH() As Double, ByRef bezVad As Boolean) As Double
+    Dim i As Long, n As Long, m As Double
+    n = UBound(gP)
+    m = Rozmisti(jenPlna)
+    Pokus = m
+    ReDim startL(1 To n)
+    ReDim startT(1 To n)
+    ReDim startW(1 To n)
+    ReDim startH(1 To n)
+    For i = 1 To n
+        startW(i) = gP(i).W
+        startH(i) = gP(i).H
+    Next i
+    bezVad = False
+    If m < 0 Then Exit Function
+    If styl = STYL_KRATSI Then
+        For i = 1 To n
+            startL(i) = gP(i).L
+            startT(i) = gP(i).T
+        Next i
+        ZlepsiBlizko m
+    End If
+    bezVad = (SoucetVad(SpocitejVady()) = 0)
+End Function
 
 Private Function GrafySlidu(sl As Slide) As Collection
     Dim c As New Collection, s As Shape, k As Long
@@ -473,10 +663,11 @@ Private Function CisloJson(ByVal d As Double) As String
 End Function
 
 ' ---------- check report ----------
+' vystup = path of the new presentation, "" = the open presentation itself was edited (zaloha = its backup).
 Private Sub NapisPrehled(ByVal cesta As String, ByVal vstup As String, ByVal vystup As String, ByVal chyba As String, _
-                         ByVal styl As String, ByVal snimky As String)
+                         ByVal styl As String, ByVal snimky As String, Optional ByVal zaloha As String = "")
     Dim i As Long, radky As String, souhrn As String, nUpr As Long, nBez As Long, nPres As Long, tabulka As String
-    Dim volby As String
+    Dim volby As String, cil As String
     For i = 1 To PocetVysledku()
         With mV(i)
             Select Case .Stav
@@ -503,10 +694,12 @@ Private Sub NapisPrehled(ByVal cesta As String, ByVal vstup As String, ByVal vys
     If styl = STYL_KRATSI Then volby = "kratší čáry" Else volby = "zarovnané sloupce"
     volby = "Rozmístění: " & volby & ". Snímky: "
     If snimky = "" Then volby = volby & "všechny." Else volby = volby & PopisSnimku(snimky) & "."
+    If vystup = "" Then cil = "Výsledek: upravena otevřená prezentace." Else cil = "Výstup: " & vystup
+    If zaloha <> "" Then cil = cil & " Záloha stavu před úpravou: " & zaloha
     ZapisUtf8 cesta, "<!doctype html>" & vbLf & "<html lang='cs'><head><meta charset='utf-8'>" & _
         "<meta name='viewport' content='width=device-width, initial-scale=1'><title>Kontrola popisků</title><style>" & Css() & _
         "</style></head>" & vbLf & "<body><main>" & vbLf & "<h1>Rozmístění popisků: " & Html(vstup) & "</h1>" & vbLf & _
-        "<p class='meta'>Výstup: " & Html(vystup) & "<br>" & Html(volby) & "<br>Nástroj verze " & VERZE & ", " & _
+        "<p class='meta'>" & Html(cil) & "<br>" & Html(volby) & "<br>Nástroj verze " & VERZE & ", " & _
         Day(Now) & ". " & Month(Now) & ". " & Year(Now) & " " & Format$(Now, "hh:nn") & "</p>" & vbLf & _
         "<p class='souhrn'>" & souhrn & "</p>" & vbLf & tabulka & vbLf & "</main></body></html>" & vbLf
 End Sub
@@ -670,10 +863,22 @@ Private Function ZakladNazvu(nazev As String) As String
     ZakladNazvu = z
 End Function
 
+' Work folder in TEMP: outputs of presentations that have no local folder (unsaved, OneDrive, SharePoint).
+Private Function PracovniSlozka() As String
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    PracovniSlozka = Environ$("TEMP") & "\" & NAZEV_DOPLNKU
+    If Not fso.FolderExists(PracovniSlozka) Then fso.CreateFolder PracovniSlozka
+End Function
+
+Private Function SlozkaVystupu(pres As Presentation, prac As String) As String
+    SlozkaVystupu = pres.Path
+    If SlozkaVystupu = "" Or LCase$(Left$(SlozkaVystupu, 4)) = "http" Then SlozkaVystupu = prac
+End Function
+
 Private Function CilovaCesta(pres As Presentation, zaklad As String, prac As String) As String
     Dim slozka As String
-    slozka = pres.Path
-    If slozka = "" Or LCase$(Left$(slozka, 4)) = "http" Then slozka = prac
+    slozka = SlozkaVystupu(pres, prac)
     Dim n As Long, kandidat As String
     For n = 1 To 99
         kandidat = slozka & "\" & zaklad & PRIPONA

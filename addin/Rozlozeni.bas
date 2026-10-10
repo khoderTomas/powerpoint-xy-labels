@@ -17,7 +17,8 @@ Private Const EPS As Double = 0.000001
 Private Const NEVEJDE_SE As Double = 100000#
 
 ' Finds the placement; returns the gap used, or -1 when the labels do not fit (the chart is then left unchanged).
-Public Function Rozmisti() As Double
+' jenPlna = try the full gap only (the pre-adjustment does not accept cramped columns).
+Public Function Rozmisti(Optional ByVal jenPlna As Boolean = False) As Double
     Dim i As Long, w As Double, h As Double, mezera As Variant
     For i = 1 To UBound(gP)  ' long labels on a single line (custom width) so that columns stay aligned
         Jednoradkovy i, w, h
@@ -31,6 +32,7 @@ Public Function Rozmisti() As Double
             Rozmisti = mezera
             Exit Function
         End If
+        If jenPlna Then Exit For
     Next mezera
     Rozmisti = -1#
 End Function

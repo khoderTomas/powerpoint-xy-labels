@@ -23,6 +23,7 @@ Private Const XL_HODNOTY As Long = 2
 Private Const XL_KATEGORIE As Long = 1
 Private Const XL_LOG As Long = -4133
 Private Const XL_BEZ_ZNACKY As Long = -4142
+Private Const XL_BEZ_POPISKU_OSY As Long = -4142  ' xlTickLabelPositionNone
 Private Const AUTO_VELIKOST As Long = 1        ' msoAutoSizeShapeToFitText
 Private Const TOLERANCE_ZAPISU As Double = 0.5
 
@@ -87,6 +88,15 @@ Public gCary() As Double
 Public gMaDelici As Boolean
 Public gDelici As Double
 Public gRezerva As Double
+' for the pre-adjustment (module Predupravy): the axis ranges the chart was read with, whether a range may be
+' widened (no tick labels) and how many of the first gCary come from slide shapes (the rest move with the data)
+Public gOsaX0 As Double, gOsaX1 As Double, gOsaY0 As Double, gOsaY1 As Double
+Public gOsaXVolna As Boolean, gOsaYVolna As Boolean
+Public gCarTvaru As Long
+' set by Predupravy.VratOsy before NactiGraf: the axes were just returned to their original ranges and the labels
+' still report positions drawn with the ranges gStX0..gStY1 (the object model does not recalculate them)
+Public gStaraOsa As Boolean
+Public gStX0 As Double, gStX1 As Double, gStY0 As Double, gStY1 As Double
 
 Private mTvary() As TvarSlidu
 
@@ -338,6 +348,12 @@ Public Function NactiGraf(sl As Slide, shp As Shape) As String
     x1 = osaX.MaximumScale
     y0 = osaY.MinimumScale
     y1 = osaY.MaximumScale
+    gOsaX0 = x0
+    gOsaX1 = x1
+    gOsaY0 = y0
+    gOsaY1 = y1
+    gOsaXVolna = (osaX.TickLabelPosition = XL_BEZ_POPISKU_OSY)
+    gOsaYVolna = (osaY.TickLabelPosition = XL_BEZ_POPISKU_OSY)
     Set pa = ch.PlotArea
     gPL = pa.InsideLeft + gCaL
     gPT = pa.InsideTop + gCaT
@@ -364,6 +380,7 @@ Public Function NactiGraf(sl As Slide, shp As Shape) As String
             End If
         End If
     Next k
+    gCarTvaru = UBound(gCary)  ' vertical lines from the slide come first, lines of helper series follow
 
     Dim i As Long, j As Long, s As Object, xs As Variant, ys As Variant, dl As Object, pocet As Long
     Dim fs As Double, nazev As String, tucne As Boolean, n As Long, motiv As String
@@ -393,6 +410,10 @@ Public Function NactiGraf(sl As Slide, shp As Shape) As String
                                 .Y = gPT + (gPB - gPT) * (1 - (CDbl(ys(j)) - y0) / (y1 - y0))
                                 .L = dl.Left + gCaL
                                 .T = dl.Top + gCaT
+                                If gStaraOsa Then  ' a label moves with its point: add the shift of the point
+                                    .L = .L + (.X - (gPL + (gPR - gPL) * (CDbl(xs(j)) - gStX0) / (gStX1 - gStX0)))
+                                    .T = .T + (.Y - (gPT + (gPB - gPT) * (1 - (CDbl(ys(j)) - gStY0) / (gStY1 - gStY0))))
+                                End If
                                 .W = dl.Width
                                 .H = dl.Height
                                 .Serie = i

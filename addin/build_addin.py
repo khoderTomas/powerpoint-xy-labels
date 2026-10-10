@@ -31,7 +31,7 @@ PP_ADDIN = 30  # ppSaveAsOpenXMLAddin
 OFFICE_GUID = '{2DF8D04C-5BFA-101B-BDE5-00AA0044DE52}'
 IKONY = ['ChartDataLabel', 'ChartDataLabelsGallery', 'ChartTypeXYScatterInsertGallery', 'ChartInsert', 'ChartTypeOtherInsertGallery']
 REL_UI = 'http://schemas.microsoft.com/office/2007/relationships/ui/extensibility'
-MODULY = ['Graf', 'Rozlozeni', 'Blizko', 'Pisma', 'Popisky']  # <module>.bas next to this script, module name = file name
+MODULY = ['Graf', 'Rozlozeni', 'Blizko', 'Predupravy', 'Pisma', 'Popisky']  # <module>.bas next to this script, module name = file name
 FORMULARE = ['Nastaveni']  # <form>.vba next to this script: code of the UserForm
 
 
