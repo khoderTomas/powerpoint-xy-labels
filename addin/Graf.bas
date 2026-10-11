@@ -78,6 +78,32 @@ Private Type TvarSlidu
     Otoceny As Boolean
 End Type
 
+' The state of one chart put aside (UlozStav, ObnovStav): module Popisky reads every chart before it places the
+' first one, because the font size is common to all of them.
+Public Type StavGrafu
+    W As Double
+    H As Double
+    PL As Double
+    PT As Double
+    PR As Double
+    PB As Double
+    CaL As Double
+    CaT As Double
+    P() As Popisek
+    Prek() As Obd
+    Cary() As Double
+    MaDelici As Boolean
+    Delici As Double
+    Rezerva As Double
+    OsaX0 As Double
+    OsaX1 As Double
+    OsaY0 As Double
+    OsaY1 As Double
+    OsaXVolna As Boolean
+    OsaYVolna As Boolean
+    CarTvaru As Long
+End Type
+
 ' state of one chart; arrays start at 1, element 0 is unused (empty list = UBound 0)
 Public gW As Double, gH As Double
 Public gPL As Double, gPT As Double, gPR As Double, gPB As Double
@@ -532,23 +558,69 @@ Public Function ZapisGraf(shp As Shape) As Long
     Next i
 End Function
 
+' ---------- the state put aside ----------
+Public Sub UlozStav(s As StavGrafu)
+    s.W = gW
+    s.H = gH
+    s.PL = gPL
+    s.PT = gPT
+    s.PR = gPR
+    s.PB = gPB
+    s.CaL = gCaL
+    s.CaT = gCaT
+    s.P = gP
+    s.Prek = gPrek
+    s.Cary = gCary
+    s.MaDelici = gMaDelici
+    s.Delici = gDelici
+    s.Rezerva = gRezerva
+    s.OsaX0 = gOsaX0
+    s.OsaX1 = gOsaX1
+    s.OsaY0 = gOsaY0
+    s.OsaY1 = gOsaY1
+    s.OsaXVolna = gOsaXVolna
+    s.OsaYVolna = gOsaYVolna
+    s.CarTvaru = gCarTvaru
+End Sub
+
+Public Sub ObnovStav(s As StavGrafu)
+    gW = s.W
+    gH = s.H
+    gPL = s.PL
+    gPT = s.PT
+    gPR = s.PR
+    gPB = s.PB
+    gCaL = s.CaL
+    gCaT = s.CaT
+    gP = s.P
+    gPrek = s.Prek
+    gCary = s.Cary
+    gMaDelici = s.MaDelici
+    gDelici = s.Delici
+    gRezerva = s.Rezerva
+    gOsaX0 = s.OsaX0
+    gOsaX1 = s.OsaX1
+    gOsaY0 = s.OsaY0
+    gOsaY1 = s.OsaY1
+    gOsaXVolna = s.OsaXVolna
+    gOsaYVolna = s.OsaYVolna
+    gCarTvaru = s.CarTvaru
+End Sub
+
 ' ---------- font size and defects ----------
-' Gives all labels the most common font size (on a tie the one found first); returns the size,
-' zmeneno = number of labels changed.
-Public Function SjednotPismo(ByRef zmeneno As Long) As Double
-    Dim n As Long, i As Long, j As Long, velikosti() As Double, pocty() As Long, m As Long, nej As Long
-    n = UBound(gP)
-    zmeneno = 0
-    If n = 0 Then Exit Function
-    ReDim velikosti(1 To n)
-    ReDim pocty(1 To n)
-    For i = 1 To n
+' The most common value (on a tie the one found first); pocet = how many of the values are used, 0 gives 0.
+Private Function Nejcastejsi(cisla() As Double, ByVal pocet As Long) As Double
+    Dim i As Long, j As Long, ruzne() As Double, pocty() As Long, m As Long, nej As Long
+    If pocet = 0 Then Exit Function
+    ReDim ruzne(1 To pocet)
+    ReDim pocty(1 To pocet)
+    For i = 1 To pocet
         For j = 1 To m
-            If velikosti(j) = gP(i).Fs Then Exit For
+            If ruzne(j) = cisla(i) Then Exit For
         Next j
         If j > m Then
             m = m + 1
-            velikosti(m) = gP(i).Fs
+            ruzne(m) = cisla(i)
         End If
         pocty(j) = pocty(j) + 1
     Next i
@@ -556,13 +628,77 @@ Public Function SjednotPismo(ByRef zmeneno As Long) As Double
     For j = 2 To m
         If pocty(j) > pocty(nej) Then nej = j
     Next j
+    Nejcastejsi = ruzne(nej)
+End Function
+
+' The most common font size the labels of the model have in the chart (before any change), 0 = no label.
+Public Function PismoVGrafu() As Double
+    Dim i As Long, n As Long, fs() As Double
+    n = UBound(gP)
+    If n = 0 Then Exit Function
+    ReDim fs(1 To n)
     For i = 1 To n
-        If gP(i).Fs <> velikosti(nej) Then
-            gP(i).Fs = velikosti(nej)
+        fs(i) = gP(i).FsPuvodni
+    Next i
+    PismoVGrafu = Nejcastejsi(fs, n)
+End Function
+
+' Gives all labels the most common font size (on a tie the one found first); returns the size,
+' zmeneno = number of labels changed.
+Public Function SjednotPismo(ByRef zmeneno As Long) As Double
+    Dim n As Long, i As Long, fs() As Double
+    n = UBound(gP)
+    zmeneno = 0
+    If n = 0 Then Exit Function
+    ReDim fs(1 To n)
+    For i = 1 To n
+        fs(i) = gP(i).Fs
+    Next i
+    SjednotPismo = Nejcastejsi(fs, n)
+    For i = 1 To n
+        If gP(i).Fs <> SjednotPismo Then
+            gP(i).Fs = SjednotPismo
             zmeneno = zmeneno + 1
         End If
     Next i
-    SjednotPismo = velikosti(nej)
+End Function
+
+' The most common font size of the data labels of a chart that is not laid out (XY series with markers), 0 = no
+' label or a chart that cannot be read. A light read: no geometry, only the size.
+Public Function PismoPopisku(ch As Object) As Double
+    Dim i As Long, j As Long, s As Object, dl As Object, n As Long, fs() As Double, v As Double
+    On Error GoTo Konec
+    ReDim fs(1 To 16)
+    For i = 1 To ch.SeriesCollection.Count
+        Set s = ch.SeriesCollection(i)
+        If JeXY(s.ChartType) Then
+            If s.MarkerStyle <> XL_BEZ_ZNACKY Then
+                For j = 1 To s.Points.Count
+                    If s.Points(j).HasDataLabel Then
+                        Set dl = s.Points(j).DataLabel
+                        If Len(dl.Text) > 0 Then
+                            v = VelikostPopisku(dl)
+                            If v > 0 Then
+                                n = n + 1
+                                If n > UBound(fs) Then ReDim Preserve fs(1 To 2 * n)
+                                fs(n) = v
+                            End If
+                        End If
+                    End If
+                Next j
+            End If
+        End If
+    Next i
+    PismoPopisku = Nejcastejsi(fs, n)
+Konec:
+End Function
+
+Private Function VelikostPopisku(dl As Object) As Double
+    Dim v As Double
+    On Error Resume Next
+    v = dl.Format.TextFrame2.TextRange.Font.Size
+    If v < 1 Or v > 4000 Then v = dl.Format.TextFrame2.TextRange.Runs(1).Font.Size  ' mixed formatting: first run
+    If v >= 1 And v <= 4000 Then VelikostPopisku = v
 End Function
 
 Public Function SpocitejVady() As Vady

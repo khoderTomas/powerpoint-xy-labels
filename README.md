@@ -10,10 +10,11 @@ a month and whose labels always end up piled on top of each other.
 - Optional **shorter lines** placement: starts from the columns, then pulls labels closer to their points.
 - When the columns do not fit (points spread over the whole chart), a fallback places as many labels as
   possible next to their points. Labels that still do not fit stay where they were and the report lists them.
-- When the placement does not come out without defects, the chart is pre-adjusted first: a slightly smaller
-  label font (at most 2 pt) and wider axis ranges (at most 1.3×, only axes without tick labels). The mildest
-  step that gives a placement without defects wins; data points are never changed.
-- The font size of the labels in a chart is unified to the most common one.
+- When the placement does not come out without defects, the chart is pre-adjusted first: wider axis ranges
+  (at most 1.3×, only axes without tick labels) and, when that is not enough, a smaller label font (at most
+  2 pt); data points are never changed.
+- One label font size for all charts laid out in a run: the smallest size that any of them needs or already
+  has. Within a chart, the labels are first unified to their most common size.
 - The result goes to a new presentation next to the original (default), or the open presentation is edited
   in place and left unsaved (a backup goes to the TEMP folder first).
 
@@ -44,7 +45,7 @@ All the work happens in VBA inside PowerPoint, no external program.
 | `addin/Graf.bas` | Reading and writing through the object model, geometry, defect counting |
 | `addin/Rozlozeni.bas` | Placement into aligned columns |
 | `addin/Blizko.bas` | "Shorter lines" placement and the fallback placement |
-| `addin/Predupravy.bas` | Pre-adjustment: smaller font and wider axis ranges, remembered in shape tags |
+| `addin/Predupravy.bas` | Pre-adjustment: wider axis ranges and a smaller font, remembered in shape tags |
 | `addin/Pisma.bas` | Text measurement (GDI) |
 | `addin/Nastaveni.vba` | Code of the dialog (an empty UserForm that creates its controls at run time) |
 | `addin/customUI14.xml` | Ribbon button on the Home tab |
@@ -61,13 +62,17 @@ All the work happens in VBA inside PowerPoint, no external program.
 - **Shorter lines**: threshold accepting from the column placement (moving a label or swapping the rows of two
   labels), a growing penalty for overlaps and crossings, then repair and polish. Random numbers are MINSTD
   and the computation runs on a 1/1024 pt grid, so the result is deterministic.
-- **Pre-adjustment** when the placement has defects or does not fit: a ladder of steps from the mildest one
-  (font smaller by 0 to 2 pt in 0.5 pt steps, axis ranges 1.0 to 1.3× in 0.1 steps, the X axis or both); the
-  first rung whose placement has no defects and the full gap between labels wins. A range is widened around the
-  quadrant dividing lines (slide shapes that do not move with the axis), so every point stays in its quadrant.
-  An axis with tick labels is never changed. The chart keeps its state before the pre-adjustment in shape tags;
-  the next run first returns the axis ranges and the font size, so repeated runs on the same file (after a data
-  update) do not add up.
+- **Pre-adjustment and the common font size.** The font size is decided for the whole run in three passes:
+  every chart is read, then each one is asked for the largest font size it comes out with (its own, or
+  smaller by 0.5 to 2 pt), and the smallest answer becomes the size of all charts, which are placed only then.
+  At a given size a chart is tried as it is and then with wider axis ranges (1.1 to 1.3× in 0.1 steps, the
+  X axis or both), so a wider range always goes before a smaller font. A range is widened around the quadrant
+  dividing lines (slide shapes that do not move with the axis), so every point stays in its quadrant. An axis
+  with tick labels is never changed. A chart that does not come out without defects at the common size is
+  placed as it is and the report shows its defects. The chart keeps its state before the pre-adjustment in
+  shape tags; the next run first returns the axis ranges and the font size, so repeated runs on the same file
+  (after a data update) do not add up. Charts that are not laid out (slides not selected, skipped charts) keep
+  their size and the report names those that differ.
 - **Fallback** when the columns do not fit even then: a label whose column position is invalid may stay "not placed";
   the search places as many labels as possible without conflicts, labels not placed keep their original
   position and the placed ones move out of their way. With fewer than half of the labels placed, the chart is

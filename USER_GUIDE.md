@@ -2,7 +2,7 @@
 
 The add-in lays out the labels in the XY charts of a presentation: two aligned columns left and right of the
 cluster of points, labels right next to isolated points, no overlapping labels and no crossing leader lines.
-It unifies the font size of the labels in a chart. By default it creates a new presentation and leaves the
+All charts it lays out get the same label font size. By default it creates a new presentation and leaves the
 original file unchanged; it can also edit the open presentation in place.
 
 ## Installation (once)
@@ -52,11 +52,16 @@ browser (`name-check.html` when the open presentation was edited).
   chart on the selected slides and overwrites manual fine-tuning of the labels.
 - To keep the add-in away from a slide, write `#labels-off` into the slide notes (the marker of older versions,
   `#popisky-ne`, still works).
-- When the placement does not come out without defects, the add-in first adjusts the chart slightly: a smaller
-  label font (at most 2 pt) and wider axis ranges (at most 1.3×, only axes without tick labels). It starts with
-  the smallest change and stops at the first one that gives a placement without defects. Ranges are widened
-  around the dividing lines, so every point stays in its quadrant; data points are never changed. The report
-  lists the change as *pre-adjustment*.
+- When the placement does not come out without defects, the add-in first adjusts the chart slightly: wider
+  axis ranges (at most 1.3×, only axes without tick labels) and, when that is not enough, a smaller label font
+  (at most 2 pt). Ranges are widened around the dividing lines, so every point stays in its quadrant; data
+  points are never changed. The report lists the change as *pre-adjustment*.
+- The label font size is the same in all charts laid out in one run: the smallest size that any of them needs
+  or already has. One dense chart therefore makes the labels smaller in all of them, and the report names the
+  slide that set the size (*common size, set by slide 5*). To keep a larger size in the other charts, write
+  `#labels-off` into the notes of that slide and lay out its labels by hand.
+- Only the slides you selected get the common size. When charts on other slides, or charts the add-in skipped,
+  have a different label size, the report opens and says where.
 - The chart remembers its state before the pre-adjustment. The next run (after a data update) first returns the
   axis ranges and the font size and adjusts them again only as needed, so the changes do not add up.
 - When even that does not help (points spread over the whole chart), the add-in places as many labels as

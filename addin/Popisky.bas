@@ -5,7 +5,8 @@ Option Explicit
 ' original, places the data labels in the XY charts of the chosen slides of the copy and opens it; the original
 ' is not changed. With "Edit the open presentation" it places the labels in the open presentation itself and
 ' leaves saving to the user.
-' Everything runs inside PowerPoint (modules Graf, Rozlozeni, Blizko, Pisma), no external program.
+' Everything runs inside PowerPoint (modules Graf, Rozlozeni, Blizko, Predupravy, Pisma), no external program.
+' The label font size is one for all charts laid out in a run (approved 11 Oct 2026): see Zpracuj.
 ' ZpracujSoubor and ZpracujOtevrenou are the entry points for tests (tests/test_vba.py): they process a file
 ' without a window, or an open presentation, and return the results as JSON.
 ' The texts the user sees are English (since 0.7.0, 11 Oct 2026); identifiers stay Czech.
@@ -15,7 +16,7 @@ Private Declare PtrSafe Function MessageBoxW Lib "user32" (ByVal hWnd As LongPtr
     ByVal lpCaption As LongPtr, ByVal uType As Long) As Long
 Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (ByRef Destination As Any, ByRef Source As Any, ByVal Length As LongPtr)
 
-Private Const VERZE As String = "0.7.0"
+Private Const VERZE As String = "0.8.0"
 Private Const NAZEV_DOPLNKU As String = "RozmistiPopisky"  ' file name, TEMP folder and settings key: not translated
 Private Const TITULEK As String = "Lay out labels"
 Private Const PRIPONA As String = "-labels"
@@ -60,6 +61,34 @@ Private Type Vysledek
 End Type
 
 Private mV() As Vysledek
+
+' A chart whose labels are to be placed: read in the first pass and placed in the last one, because the font
+' size is common to all charts and every chart has to be read before the first one is written.
+Private Type Prace
+    Tvar As Shape
+    Vysl As Long             ' index of its row in mV
+    Model As StavGrafu       ' the chart as read, with the font size unified
+    PuvL() As Double         ' original positions and sizes: labels the fallback cannot place stay there
+    PuvT() As Double
+    PuvW() As Double
+    PuvH() As Double
+    Poznamky As String
+    Nahradni As String       ' fonts measured with a substitute
+    Vraceno As Boolean       ' a pre-adjustment of an earlier run was returned
+    Pismo As Double          ' font size before the pre-adjustment
+    Chce As Double           ' the largest font size the chart comes out with
+    Spolecne As Boolean      ' takes part in the common font size (pre-adjustment on, the shape accepts tags)
+    Cas As Single            ' seconds spent on the question for the font size
+    ZkVelikost() As Double   ' font sizes tried so far (ZkusVelikost), from index 1
+    ZkBezVad() As Boolean    ' the size comes out without defects...
+    ZkKroky() As Long        ' ...with this axis-range rung
+    ZkObeOsy() As Boolean
+End Type
+
+Private mPrace() As Prace
+Private mJineSnimek() As Long     ' charts left with another font size than the common one: slide...
+Private mJinePismo() As Double    ' ...and the label font size
+Private mVetaVelikosti As String  ' the sentence about them for the check report, "" = none
 
 ' ---------- ribbon button ----------
 Public Sub RozmistiPopiskyTlacitko(control As IRibbonControl)
@@ -310,14 +339,20 @@ Chyba:
 End Function
 
 ' ---------- processing ----------
-' Only the slides in snimky (normalized list, "" = all); predupravy = a chart whose placement has defects may get
-' a smaller font and wider axis ranges. Returns 0 all charts processed, 2 no suitable chart, 3 some charts
-' unchanged, skipped or with a warning.
+' Only the slides in snimky (normalized list, "" = all). Three passes: every chart is read (PrectiGraf), the
+' common font size is decided (SpolecnaVelikost) and only then the charts are placed and written (UmistiGraf).
+' predupravy = a chart whose placement has defects may get wider axis ranges and a smaller font, and the font
+' size is then the same in all charts that are laid out. Returns 0 all charts processed, 2 no suitable chart,
+' 3 some charts unchanged, skipped, with a warning or left with another font size.
 Private Function Zpracuj(pres As Presentation, ByVal upravit As Boolean, ByVal styl As String, ByVal snimky As String, _
                          ByVal predupravy As Boolean) As Long
     Dim sl As Slide, grafy As Collection, shp As Shape, znacka As String, i As Long, cast As Variant
-    Dim cislo As Long, popis As String, vybrano() As Boolean
+    Dim cislo As Long, popis As String, vybrano() As Boolean, spolecna As Double, urcil As Long
     ReDim mV(0 To 0)
+    ReDim mPrace(0 To 0)
+    ReDim mJineSnimek(0 To 0)
+    ReDim mJinePismo(0 To 0)
+    mVetaVelikosti = ""
     ReDim vybrano(0 To pres.Slides.Count)
     For i = 1 To pres.Slides.Count
         vybrano(i) = (snimky = "")
@@ -335,16 +370,28 @@ Private Function Zpracuj(pres As Presentation, ByVal upravit As Boolean, ByVal s
                 NactiTvary sl
                 znacka = ZnackaSlidu(sl)
                 For Each shp In grafy
-                    If MaXYSerii(shp.Chart) Then ZpracujGraf sl, shp, znacka, upravit, styl, predupravy
+                    If MaXYSerii(shp.Chart) Then PrectiGraf sl, shp, znacka, upravit, predupravy
                 Next shp
             End If
         End If
     Next sl
+    If UBound(mPrace) > 0 Then
+        If predupravy Then spolecna = SpolecnaVelikost(styl, urcil)
+        For i = 1 To UBound(mPrace)
+            UmistiGraf i, styl, spolecna, urcil
+        Next i
+        If spolecna > 0 Then
+            JineVelikostiMimoVyber pres, vybrano
+            mVetaVelikosti = PopisJinychVelikosti(spolecna)
+        End If
+    End If
+    Erase mPrace
     UvolniPisma
     If UBound(mV) = 0 Then
         Zpracuj = 2
         Exit Function
     End If
+    If mVetaVelikosti <> "" Then Zpracuj = 3
     For i = 1 To UBound(mV)
         If mV(i).Stav <> STAV_UPRAVENO Or mV(i).Varovani Then Zpracuj = 3
     Next i
@@ -352,18 +399,17 @@ Private Function Zpracuj(pres As Presentation, ByVal upravit As Boolean, ByVal s
 Chyba:
     cislo = Err.Number
     popis = Err.Description
+    Erase mPrace
     UvolniPisma
     Err.Raise cislo, , popis
 End Function
 
+' First pass: reads the chart and adds its row to the results. A chart whose labels are to be placed is put
+' aside in mPrace with the font size unified and a pre-adjustment of an earlier run returned.
 ' znacka = the skip marker found in the slide notes ("" = none).
-Private Sub ZpracujGraf(sl As Slide, shp As Shape, ByVal znacka As String, ByVal upravit As Boolean, ByVal styl As String, _
-                        ByVal predupravy As Boolean)
-    Dim v As Vysledek, duvod As String, i As Long, zmeneno As Long, velikost As Double, mezera As Double
-    Dim nesedi As Long, poznamky As String, nahradni As String, zacatek As Single, startL() As Double, startT() As Double
-    Dim puvL() As Double, puvT() As Double, puvW() As Double, puvH() As Double, nouze As Boolean, nevesly As String
-    Dim startW() As Double, startH() As Double, bezVad As Boolean, pricka As Long, k As Long, zkus As Double
-    Dim vraceno As Boolean, puvPismo As Double, preskocit As Boolean
+Private Sub PrectiGraf(sl As Slide, shp As Shape, ByVal znacka As String, ByVal upravit As Boolean, ByVal predupravy As Boolean)
+    Dim v As Vysledek, duvod As String, i As Long, n As Long, zmeneno As Long, velikost As Double
+    Dim nahradni As String, vraceno As Boolean, puvPismo As Double, preskocit As Boolean, ceka As Boolean
     preskocit = (znacka <> "")
     v.CisloSlidu = sl.SlideIndex
     v.Jmeno = shp.Name
@@ -385,21 +431,27 @@ Private Sub ZpracujGraf(sl As Slide, shp As Shape, ByVal znacka As String, ByVal
     If preskocit Then
         v.Stav = STAV_PRESKOCENO
         v.Poznamka = "marker " & znacka & " in the slide notes"
+        If upravit Then PridejJinou sl.SlideIndex, PismoVGrafu()
     ElseIf Not upravit Then
         v.Stav = STAV_KONTROLA
     Else
-        ReDim puvL(1 To UBound(gP))  ' original positions: labels the fallback cannot place stay there
-        ReDim puvT(1 To UBound(gP))
-        ReDim puvW(1 To UBound(gP))
-        ReDim puvH(1 To UBound(gP))
+        ceka = True
+        n = UBound(mPrace) + 1
+        ReDim Preserve mPrace(0 To n)
+        ReDim mPrace(n).PuvL(1 To UBound(gP))  ' original positions: labels the fallback cannot place stay there
+        ReDim mPrace(n).PuvT(1 To UBound(gP))
+        ReDim mPrace(n).PuvW(1 To UBound(gP))
+        ReDim mPrace(n).PuvH(1 To UBound(gP))
         For i = 1 To UBound(gP)
-            puvL(i) = gP(i).L
-            puvT(i) = gP(i).T
-            puvW(i) = gP(i).W
-            puvH(i) = gP(i).H
+            mPrace(n).PuvL(i) = gP(i).L
+            mPrace(n).PuvT(i) = gP(i).T
+            mPrace(n).PuvW(i) = gP(i).W
+            mPrace(n).PuvH(i) = gP(i).H
         Next i
         velikost = SjednotPismo(zmeneno)
-        If zmeneno > 0 Then poznamky = "font size unified to " & CisloPrehledu(velikost) & " pt (labels changed: " & zmeneno & ")"
+        If zmeneno > 0 Then
+            mPrace(n).Poznamky = "font size unified to " & CisloPrehledu(velikost) & " pt (labels changed: " & zmeneno & ")"
+        End If
         puvPismo = PismoPredUpravou(shp, velikost)
         If puvPismo > 0 Then  ' an earlier run made the font smaller: start from the size before it
             For i = 1 To UBound(gP)
@@ -408,75 +460,250 @@ Private Sub ZpracujGraf(sl As Slide, shp As Shape, ByVal znacka As String, ByVal
             velikost = puvPismo
             vraceno = True
         End If
-        zacatek = Timer
-        mezera = Pokus(styl, False, startL, startT, startW, startH, bezVad)
-        If Not bezVad And predupravy Then
-            If MuzeZnacit(shp) Then  ' the first rung of the ladder that comes out without defects
-                ZapamatujZaklad
-                For k = 1 To PostavZebrik()
-                    PouzijPricku k
-                    zkus = Pokus(styl, True, startL, startT, startW, startH, bezVad)
-                    If bezVad Then
-                        pricka = k
-                        mezera = zkus
-                        Exit For
-                    End If
-                Next k
-                If pricka = 0 Then  ' no rung helps: the chart as it is
-                    PouzijPricku 0
-                    mezera = Pokus(styl, False, startL, startT, startW, startH, bezVad)
-                End If
-            End If
-        End If
-        If mezera >= 0 And styl = STYL_KRATSI Then
-            v.Model = ModelJson(mezera, startL, startT, startW, startH, False, puvL, puvT, puvW, puvH)
-        ElseIf mezera < 0 Then  ' the columns do not fit: fallback placement (both options)
-            nouze = True
-            mezera = Nouzove(puvL, puvT, puvW, puvH, startL, startT)
-            If mezera >= 0 Then v.Model = ModelJson(mezera, startL, startT, startW, startH, True, puvL, puvT, puvW, puvH)
-        End If
-        v.Cas = Timer - zacatek
-        If mezera < 0 Then
-            v.Stav = STAV_BEZE_ZMENY
-            v.Poznamka = "the labels do not fit into the chart, adjust by hand"
-        Else
-            ZapisPredupravu shp, pricka, velikost  ' before the labels: they are placed against the new axis ranges
-            nesedi = ZapisGraf(shp)
-            v.Po = SpocitejVady()
-            v.MaPo = True
-            For i = 1 To UBound(gP)
-                If gP(i).Rezim = "D" Then v.Primo = v.Primo + 1
-            Next i
-            v.Stav = STAV_UPRAVENO
-            If pricka > 0 Then
-                poznamky = Pripoj(poznamky, PopisPricky(pricka, velikost))
-                v.Predupraveno = True
-            ElseIf vraceno Then
-                poznamky = Pripoj(poznamky, "pre-adjustment from the previous run reverted")
-            End If
-            If nouze Then poznamky = Pripoj(poznamky, "the columns did not fit, labels placed closer to their points")
-            If mezera < 1.5 Then poznamky = Pripoj(poznamky, "little room, labels closer together")
-            For i = 1 To UBound(gP)
-                If gP(i).Rezim = "N" Then
-                    If nevesly <> "" Then nevesly = nevesly & ", "
-                    nevesly = nevesly & gP(i).Txt
-                End If
-            Next i
-            If nevesly <> "" Then
-                poznamky = Pripoj(poznamky, "labels that did not fit stayed where they were (adjust by hand): " & nevesly)
-                v.Varovani = True
-            End If
-            If nesedi > 0 Then
-                poznamky = Pripoj(poznamky, "position after writing differs from the computed one by more than 0.5 pt (labels: " & nesedi & "), check them")
-                v.Varovani = True
-            End If
-            v.Poznamka = poznamky
-            v.Geometrie = GeometrieJson()
-        End If
+        Set mPrace(n).Tvar = shp
+        mPrace(n).Vysl = UBound(mV) + 1
+        mPrace(n).Pismo = velikost
+        mPrace(n).Chce = velikost
+        mPrace(n).Vraceno = vraceno
+        mPrace(n).Nahradni = nahradni
+        If predupravy Then mPrace(n).Spolecne = MuzeZnacit(shp)
+        ReDim mPrace(n).ZkVelikost(0 To 0)
+        ReDim mPrace(n).ZkBezVad(0 To 0)
+        ReDim mPrace(n).ZkKroky(0 To 0)
+        ReDim mPrace(n).ZkObeOsy(0 To 0)
+        UlozStav mPrace(n).Model
     End If
-    If nahradni <> "" Then v.Poznamka = Pripoj(v.Poznamka, "font not installed: " & nahradni & " (measured with a substitute)")
+    If nahradni <> "" And Not ceka Then
+        v.Poznamka = Pripoj(v.Poznamka, "font not installed: " & nahradni & " (measured with a substitute)")
+    End If
     PridejVysledek v
 End Sub
+
+' Second pass: the common font size of the charts that take part = the smallest one a chart asks for or has
+' (0 = no such chart); urcil = index in mPrace of the first chart with that size.
+Private Function SpolecnaVelikost(ByVal styl As String, ByRef urcil As Long) As Double
+    Dim i As Long, zacatek As Single, nej As Double, chce As Double
+    urcil = 0
+    For i = 1 To UBound(mPrace)
+        If mPrace(i).Spolecne Then
+            zacatek = Timer
+            ObnovStav mPrace(i).Model
+            ZapamatujZaklad
+            chce = PotrebnaVelikost(i, styl)
+            mPrace(i).Chce = chce
+            mPrace(i).Cas = Timer - zacatek
+            If urcil = 0 Or chce < nej Then
+                nej = chce
+                urcil = i
+            End If
+        End If
+    Next i
+    SpolecnaVelikost = nej
+End Function
+
+' The largest font size the chart in the model comes out with without defects (ZkusVelikost): its own, or smaller
+' by PISMO_KROK up to PISMO_KROK * PISMO_KROKU. When none helps, its own: such a chart does not decide.
+Private Function PotrebnaVelikost(ByVal i As Long, ByVal styl As String) As Double
+    Dim p As Long, velikost As Double, kroky As Long, obeOsy As Boolean, mezera As Double
+    Dim startL() As Double, startT() As Double, startW() As Double, startH() As Double
+    For p = 0 To PISMO_KROKU
+        velikost = mPrace(i).Pismo - PISMO_KROK * p
+        If ZkusVelikost(i, styl, velikost, startL, startT, startW, startH, kroky, obeOsy, mezera) Then
+            PotrebnaVelikost = velikost
+            Exit Function
+        End If
+    Next p
+    PotrebnaVelikost = mPrace(i).Pismo
+End Function
+
+' Places the model with the font size velikost: first the chart as it is (every gap: cramped columns are no reason
+' to change a chart), then the axis-range rungs from the mildest (the full gap only). True = it comes out without
+' defects, kroky / obeOsy = the rung and mezera = the gap; otherwise the model has the font size velikost and the
+' ranges of the chart. The outcome for a size is remembered in mPrace(i): a second question only repeats the
+' placement found, a known failure is not computed again.
+Private Function ZkusVelikost(ByVal i As Long, ByVal styl As String, ByVal velikost As Double, startL() As Double, _
+                              startT() As Double, startW() As Double, startH() As Double, ByRef kroky As Long, _
+                              ByRef obeOsy As Boolean, ByRef mezera As Double) As Boolean
+    Dim k As Long, j As Long, n As Long, odJ As Long, prKroky() As Long, prObe() As Boolean, bezVad As Boolean, znamy As Long
+    For k = 1 To UBound(mPrace(i).ZkVelikost)
+        If mPrace(i).ZkVelikost(k) = velikost Then znamy = k
+    Next k
+    n = PrickyOs(prKroky, prObe)
+    If znamy > 0 Then
+        If mPrace(i).ZkBezVad(znamy) Then  ' only the rung found (0 = the chart as it is)
+            prKroky(0) = mPrace(i).ZkKroky(znamy)
+            prObe(0) = mPrace(i).ZkObeOsy(znamy)
+            n = 0
+        Else
+            odJ = n + 1
+        End If
+    Else
+        znamy = UBound(mPrace(i).ZkVelikost) + 1
+        ReDim Preserve mPrace(i).ZkVelikost(0 To znamy)
+        ReDim Preserve mPrace(i).ZkBezVad(0 To znamy)
+        ReDim Preserve mPrace(i).ZkKroky(0 To znamy)
+        ReDim Preserve mPrace(i).ZkObeOsy(0 To znamy)
+        mPrace(i).ZkVelikost(znamy) = velikost
+    End If
+    For j = odJ To n
+        PouzijUpravu velikost, prKroky(j), prObe(j)
+        mezera = Pokus(styl, prKroky(j) > 0, startL, startT, startW, startH, bezVad)
+        If bezVad Then
+            kroky = prKroky(j)
+            obeOsy = prObe(j)
+            mPrace(i).ZkBezVad(znamy) = True
+            mPrace(i).ZkKroky(znamy) = kroky
+            mPrace(i).ZkObeOsy(znamy) = obeOsy
+            ZkusVelikost = True
+            Exit Function
+        End If
+    Next j
+    mPrace(i).ZkBezVad(znamy) = False
+    kroky = 0
+    obeOsy = False
+    PouzijUpravu velikost, 0, False
+End Function
+
+' Third pass: places the labels of chart i of mPrace with the common font size (0 = pre-adjustment off) and
+' writes them. urcil = index in mPrace of the chart that set the common size.
+Private Sub UmistiGraf(ByVal i As Long, ByVal styl As String, ByVal spolecna As Double, ByVal urcil As Long)
+    Dim k As Long, iv As Long, velikost As Double, mezera As Double, kroky As Long, obeOsy As Boolean
+    Dim startL() As Double, startT() As Double, startW() As Double, startH() As Double, bezVad As Boolean
+    Dim puvL() As Double, puvT() As Double, puvW() As Double, puvH() As Double, nouze As Boolean, nevesly As String
+    Dim nesedi As Long, poznamky As String, uprava As String, zacatek As Single, modelJs As String, urcilSnimek As Long, shp As Shape
+    zacatek = Timer
+    iv = mPrace(i).Vysl
+    Set shp = mPrace(i).Tvar
+    puvL = mPrace(i).PuvL
+    puvT = mPrace(i).PuvT
+    puvW = mPrace(i).PuvW
+    puvH = mPrace(i).PuvH
+    poznamky = mPrace(i).Poznamky
+    velikost = mPrace(i).Pismo
+    ObnovStav mPrace(i).Model
+    ZapamatujZaklad
+    If spolecna > 0 And mPrace(i).Spolecne Then
+        velikost = spolecna
+        If Not ZkusVelikost(i, styl, velikost, startL, startT, startW, startH, kroky, obeOsy, mezera) Then
+            ' it does not come out without defects with the common size: the chart as it is
+            mezera = Pokus(styl, False, startL, startT, startW, startH, bezVad)
+        End If
+    Else
+        mezera = Pokus(styl, False, startL, startT, startW, startH, bezVad)
+    End If
+    If mezera >= 0 And styl = STYL_KRATSI Then
+        modelJs = ModelJson(mezera, startL, startT, startW, startH, False, puvL, puvT, puvW, puvH)
+    ElseIf mezera < 0 Then  ' the columns do not fit: fallback placement (both options)
+        nouze = True
+        mezera = Nouzove(puvL, puvT, puvW, puvH, startL, startT)
+        If mezera >= 0 Then modelJs = ModelJson(mezera, startL, startT, startW, startH, True, puvL, puvT, puvW, puvH)
+    End If
+    mV(iv).Model = modelJs
+    If mezera < 0 Then
+        mV(iv).Stav = STAV_BEZE_ZMENY
+        poznamky = "the labels do not fit into the chart, adjust by hand"
+        If spolecna > 0 Then PridejJinou mV(iv).CisloSlidu, PismoVGrafu()
+    Else
+        ZapisPredupravu shp, mPrace(i).Pismo, velikost, kroky, obeOsy  ' before the labels: against the new axis ranges
+        nesedi = ZapisGraf(shp)
+        mV(iv).Po = SpocitejVady()
+        mV(iv).MaPo = True
+        For k = 1 To UBound(gP)
+            If gP(k).Rezim = "D" Then mV(iv).Primo = mV(iv).Primo + 1
+        Next k
+        mV(iv).Stav = STAV_UPRAVENO
+        If urcil > 0 And urcil <> i Then urcilSnimek = mV(mPrace(urcil).Vysl).CisloSlidu
+        uprava = PopisUpravy(mPrace(i).Pismo, velikost, kroky, obeOsy, urcilSnimek)
+        If uprava <> "" Then
+            poznamky = Pripoj(poznamky, uprava)
+            mV(iv).Predupraveno = True
+        ElseIf mPrace(i).Vraceno Then
+            poznamky = Pripoj(poznamky, "pre-adjustment from the previous run reverted")
+        End If
+        If nouze Then poznamky = Pripoj(poznamky, "the columns did not fit, labels placed closer to their points")
+        If mezera < 1.5 Then poznamky = Pripoj(poznamky, "little room, labels closer together")
+        For k = 1 To UBound(gP)
+            If gP(k).Rezim = "N" Then
+                If nevesly <> "" Then nevesly = nevesly & ", "
+                nevesly = nevesly & gP(k).Txt
+            End If
+        Next k
+        If nevesly <> "" Then
+            poznamky = Pripoj(poznamky, "labels that did not fit stayed where they were (adjust by hand): " & nevesly)
+            mV(iv).Varovani = True
+        End If
+        If nesedi > 0 Then
+            poznamky = Pripoj(poznamky, "position after writing differs from the computed one by more than 0.5 pt (labels: " & nesedi & "), check them")
+            mV(iv).Varovani = True
+        End If
+        mV(iv).Geometrie = GeometrieJson()
+        If spolecna > 0 And velikost <> spolecna Then PridejJinou mV(iv).CisloSlidu, velikost
+    End If
+    If mPrace(i).Nahradni <> "" Then
+        poznamky = Pripoj(poznamky, "font not installed: " & mPrace(i).Nahradni & " (measured with a substitute)")
+    End If
+    mV(iv).Poznamka = poznamky
+    mV(iv).Cas = mPrace(i).Cas + (Timer - zacatek)
+End Sub
+
+' ---------- charts left with another font size ----------
+' A chart that is not laid out with the common font size (slide not selected, skip marker, labels that do not
+' fit, a shape without tags): its slide and its label font size.
+Private Sub PridejJinou(ByVal snimek As Long, ByVal velikost As Double)
+    Dim n As Long
+    If velikost <= 0 Then Exit Sub
+    n = UBound(mJineSnimek) + 1
+    ReDim Preserve mJineSnimek(0 To n)
+    ReDim Preserve mJinePismo(0 To n)
+    mJineSnimek(n) = snimek
+    mJinePismo(n) = velikost
+End Sub
+
+' The XY charts on the slides that are not selected: only their label font size is read, nothing is changed.
+Private Sub JineVelikostiMimoVyber(pres As Presentation, vybrano() As Boolean)
+    Dim sl As Slide, shp As Shape
+    On Error Resume Next  ' the note is only informative, a chart that cannot be read is left out
+    For Each sl In pres.Slides
+        If Not vybrano(sl.SlideIndex) Then
+            For Each shp In GrafySlidu(sl)
+                If MaXYSerii(shp.Chart) Then PridejJinou sl.SlideIndex, PismoPopisku(shp.Chart)
+            Next shp
+        End If
+    Next sl
+End Sub
+
+' Sentence for the check report about the charts whose labels have another size than the common one, in slide
+' order; "" = there is none.
+Private Function PopisJinychVelikosti(ByVal spolecna As Double) As String
+    Dim i As Long, j As Long, n As Long, snimek As Long, velikost As Double, s As String, polozka As String
+    n = UBound(mJineSnimek)
+    For i = 2 To n  ' insertion sort by slide number, stable
+        snimek = mJineSnimek(i)
+        velikost = mJinePismo(i)
+        j = i - 1
+        Do While j >= 1
+            If mJineSnimek(j) <= snimek Then Exit Do
+            mJineSnimek(j + 1) = mJineSnimek(j)
+            mJinePismo(j + 1) = mJinePismo(j)
+            j = j - 1
+        Loop
+        mJineSnimek(j + 1) = snimek
+        mJinePismo(j + 1) = velikost
+    Next i
+    For i = 1 To n
+        If mJinePismo(i) <> spolecna Then
+            polozka = "slide " & mJineSnimek(i) & " (" & CisloPrehledu(mJinePismo(i)) & " pt)"
+            If InStr(1, ", " & s & ",", ", " & polozka & ",", vbBinaryCompare) = 0 Then
+                If s <> "" Then s = s & ", "
+                s = s & polozka
+            End If
+        End If
+    Next i
+    If s <> "" Then
+        PopisJinychVelikosti = "Common label size of the charts laid out: " & CisloPrehledu(spolecna) & " pt. " & _
+            "Other charts keep their own size: " & s & "."
+    End If
+End Function
 
 ' One placement of the model as it is: the columns, then the shorter lines for STYL_KRATSI. Returns the gap of the
 ' columns (-1 = they do not fit; jenPlna = only the full gap counts); bezVad = it fits and has no defects.
@@ -705,6 +932,7 @@ Private Sub NapisPrehled(ByVal cesta As String, ByVal vstup As String, ByVal vys
         souhrn = BEZ_GRAFU
     Else
         souhrn = "Charts laid out: " & nUpr & ". Unchanged, adjust by hand: " & nBez & ". Skipped: " & nPres & "."
+        If mVetaVelikosti <> "" Then souhrn = souhrn & "</p>" & vbLf & "<p class='souhrn'>" & Html(mVetaVelikosti)
     End If
     If radky <> "" Then
         tabulka = "<table><thead><tr><th>Slide</th><th>Result</th><th>Labels</th><th>Defects before</th><th>Defects after</th>" & _
