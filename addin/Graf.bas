@@ -335,13 +335,13 @@ Public Function NactiGraf(sl As Slide, shp As Shape) As String
     gRezerva = 0#
 
     If Not (ch.HasAxis(XL_KATEGORIE, 1) And ch.HasAxis(XL_HODNOTY, 1)) Then
-        NactiGraf = "chybí vodorovná nebo svislá osa"
+        NactiGraf = "horizontal or vertical axis is missing"
         Exit Function
     End If
     Set osaX = ch.Axes(XL_KATEGORIE, 1)
     Set osaY = ch.Axes(XL_HODNOTY, 1)
     If osaX.ReversePlotOrder Or osaY.ReversePlotOrder Or osaX.ScaleType = XL_LOG Or osaY.ScaleType = XL_LOG Then
-        NactiGraf = "obrácená nebo logaritmická osa"
+        NactiGraf = "reversed or logarithmic axis"
         Exit Function
     End If
     x0 = osaX.MinimumScale  ' also for an automatic bound; the axis stays automatic

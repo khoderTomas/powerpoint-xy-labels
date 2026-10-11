@@ -22,7 +22,8 @@ The result is still a native chart: labels can be dragged with the mouse and sta
 **Download:** [RozmistiPopisky.ppam](https://github.com/khoderTomas/powerpoint-xy-labels/releases/latest/download/RozmistiPopisky.ppam)
 (latest release). Installation and use: [USER_GUIDE.md](USER_GUIDE.md).
 
-The user interface of the add-in (ribbon button, dialog, report) is in Czech.
+The user interface of the add-in (ribbon button, dialog, messages, report) is in English. Identifiers in the
+source and the file name of the add-in are Czech.
 
 ## What it handles
 
@@ -30,7 +31,7 @@ The user interface of the add-in (ribbon button, dialog, report) is in Czech.
 - Linear axes with fixed or automatic bounds. Reversed and logarithmic axes are skipped.
 - Charts inside groups (unrotated), other shapes on the slide as obstacles, vertical reference lines
   (a series without markers whose points share one x value) and a horizontal quadrant divider (a connector).
-- A slide with `#popisky-ne` in its notes is skipped.
+- A slide with `#labels-off` in its notes is skipped.
 - Not handled yet: bubble charts.
 
 ## How it works

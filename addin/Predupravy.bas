@@ -142,13 +142,13 @@ End Sub
 Public Function PopisPricky(ByVal k As Long, ByVal pismo As Double) As String
     Dim s As String
     If mKrokyPisma(k) > 0 Then
-        s = "písmo " & CisloCesky(pismo) & " → " & CisloCesky(pismo - PISMO_KROK * mKrokyPisma(k)) & " pt"
+        s = "font " & CisloPrehledu(pismo) & " → " & CisloPrehledu(pismo - PISMO_KROK * mKrokyPisma(k)) & " pt"
     End If
     If mKrokyOsy(k) > 0 Then
         If s <> "" Then s = s & ", "
-        s = s & "rozsah " & IIf(mObe(k), "obou os", "osy X") & " " & CisloCesky(1# + OSA_KROK * mKrokyOsy(k)) & "×"
+        s = s & IIf(mObe(k), "range of both axes", "X axis range") & " " & CisloPrehledu(1# + OSA_KROK * mKrokyOsy(k)) & "×"
     End If
-    PopisPricky = "předúprava: " & s
+    PopisPricky = "pre-adjustment: " & s
 End Function
 
 ' ---------- memory of the chart (shape tags) ----------
@@ -262,9 +262,8 @@ Private Function CisloText(ByVal d As Double) As String
     CisloText = Trim$(Str$(d))
 End Function
 
-' Number for the report: 9,5 or 1,3.
-Private Function CisloCesky(ByVal d As Double) As String
-    CisloCesky = Trim$(Str$(d))
-    If Left$(CisloCesky, 1) = "." Then CisloCesky = "0" & CisloCesky
-    CisloCesky = Replace(CisloCesky, ".", ",")
+' Number for the report: 9.5 or 1.3, with a decimal point in any locale.
+Public Function CisloPrehledu(ByVal d As Double) As String
+    CisloPrehledu = Trim$(Str$(d))
+    If Left$(CisloPrehledu, 1) = "." Then CisloPrehledu = "0" & CisloPrehledu
 End Function

@@ -2,10 +2,10 @@
   <ribbon>
     <tabs>
       <tab idMso="TabHome">
-        <group id="PopiskyGrafu" label="Popisky grafu">
-          <button id="RozmistitPopisky" label="Rozmístit popisky" size="large" imageMso="{IKONA}"
-                  screentip="Rozmístit popisky v XY grafech"
-                  supertip="Vytvoří kopii prezentace s rozmístěnými popisky ve všech XY grafech a otevře ji. Původní prezentace zůstane beze změny."
+        <group id="PopiskyGrafu" label="Chart labels">
+          <button id="RozmistitPopisky" label="Lay out labels" size="large" imageMso="{IKONA}"
+                  screentip="Lay out labels in XY charts"
+                  supertip="Lays out the data labels of the XY charts on the slides you choose: in a new presentation next to the original, or in the open presentation."
                   onAction="RozmistiPopiskyTlacitko"/>
         </group>
       </tab>

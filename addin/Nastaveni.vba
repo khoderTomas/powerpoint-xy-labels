@@ -3,7 +3,7 @@ Option Explicit
 ' Dialog before placement: which slides, which placement (approved on 9 Oct 2026) and where the result goes
 ' (approved on 10 Oct 2026). The controls are created at run time; the build (doplnek/sestav_doplnek.py) only
 ' puts this code into an empty UserForm named Nastaveni.
-' Czech text in string literals goes through ChrW at build time.
+' The captions are English (since 0.7.0); non-ASCII text in string literals goes through ChrW at build time.
 ' Use: Priprav, Show (modal), read Ok, Styl, Snimky and Kam, Unload.
 
 Public Ok As Boolean
@@ -34,39 +34,39 @@ Public Sub Priprav(ByVal pocet As Long, ByVal vybrane As String, ByVal zMiniatur
     Dim popis As String, n As Long
     mPocet = pocet
     mVybrane = vybrane
-    Me.Caption = "Rozmístit popisky"
+    Me.Caption = "Lay out labels"
     Me.Width = 296
     Me.Height = 300
-    Nadpis "Které snímky", 12, 10
-    Set mVse = Volba("Všechny snímky", "V", "Snimky", 18, 28, 260)
-    Set mVybraneOpt = Volba("Vybrané snímky", "B", "Snimky", 18, 48, 260)
-    Set mCislaOpt = Volba("Čísla snímků:", "L", "Snimky", 18, 68, 92)
+    Nadpis "Which slides", 12, 10
+    Set mVse = Volba("All slides", "A", "Snimky", 18, 28, 260)
+    Set mVybraneOpt = Volba("Selected slides", "S", "Snimky", 18, 48, 260)
+    Set mCislaOpt = Volba("Slide numbers:", "N", "Snimky", 18, 68, 92)
     Set mCisla = Me.Controls.Add("Forms.TextBox.1")
     Umisti mCisla, 112, 67, 166, 18
-    Nadpis "Rozmístění", 12, 98
-    Set mSloupce = Volba("Zarovnané sloupce", "Z", "Styl", 18, 116, 260)
-    Set mKratsi = Volba("Kratší čáry (zkušební)", "K", "Styl", 18, 136, 260)
-    Nadpis "Výsledek", 12, 166
-    Set mKopie = Volba("Nová prezentace vedle původní (název-popisky.pptx)", "N", "Kam", 18, 184, 260)
-    Set mOtevrena = Volba("Upravit otevřenou prezentaci", "U", "Kam", 18, 204, 260)
+    Nadpis "Placement", 12, 98
+    Set mSloupce = Volba("Aligned columns", "C", "Styl", 18, 116, 260)
+    Set mKratsi = Volba("Shorter lines (trial)", "L", "Styl", 18, 136, 260)
+    Nadpis "Result", 12, 166
+    Set mKopie = Volba("New presentation next to the original (name-labels.pptx)", "P", "Kam", 18, 184, 260)
+    Set mOtevrena = Volba("Edit the open presentation", "E", "Kam", 18, 204, 260)
     Set mOk = Me.Controls.Add("Forms.CommandButton.1")
     Umisti mOk, 124, 236, 74, 24
-    mOk.Caption = "Rozmístit"
+    mOk.Caption = "Lay out"
     mOk.Default = True
     Set mZrusit = Me.Controls.Add("Forms.CommandButton.1")
     Umisti mZrusit, 206, 236, 74, 24
-    mZrusit.Caption = "Zrušit"
+    mZrusit.Caption = "Cancel"
     mZrusit.Cancel = True
 
     If vybrane <> "" Then
         n = UBound(Split(vybrane, ",")) + 1
         popis = PopisSnimku(vybrane)
         If n = 1 Then
-            mVybraneOpt.Caption = "Vybraný snímek: " & popis
+            mVybraneOpt.Caption = "Selected slide: " & popis
         ElseIf Len(popis) <= 20 Then
-            mVybraneOpt.Caption = "Vybrané snímky: " & popis
+            mVybraneOpt.Caption = "Selected slides: " & popis
         Else
-            mVybraneOpt.Caption = "Vybrané snímky (" & n & ")"
+            mVybraneOpt.Caption = "Selected slides (" & n & ")"
         End If
     Else
         mVybraneOpt.Enabled = False
