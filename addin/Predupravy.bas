@@ -30,10 +30,10 @@ Private Const XL_HODNOTY As Long = 2
 Private Const XL_KATEGORIE As Long = 1
 Private Const SHODA As Double = 0.000000001             ' relative tolerance of a number stored in a tag
 
-Private mZakX() As Double, mZakY() As Double, mZakFs() As Double, mZakCary() As Double
+Private mZakX() As Double, mZakY() As Double, mZakFs() As Double, mZakCary() As Double, mZakBub() As BodBubliny
 
 ' ---------- the model at a font size and an axis-range rung ----------
-' Remembers the model before the pre-adjustment: points, font sizes and vertical lines.
+' Remembers the model before the pre-adjustment: points, font sizes, vertical lines and bubbles without a label.
 Public Sub ZapamatujZaklad()
     Dim i As Long, n As Long
     n = UBound(gP)
@@ -46,6 +46,7 @@ Public Sub ZapamatujZaklad()
         mZakFs(i) = gP(i).Fs
     Next i
     mZakCary = gCary
+    mZakBub = gBub
 End Sub
 
 ' Axis-range rungs of the chart in the model from the mildest: kroky(1..n) = steps of OSA_KROK, obeOsy(1..n) = both
@@ -73,7 +74,8 @@ Private Sub Stred(ByRef cx As Double, ByRef cy As Double)
 End Sub
 
 ' Sets the model: the font size of the labels (velikost <= 0 = their own) and an axis-range rung (kroky = 0 = the
-' ranges of the chart), that is the points and the helper-series lines.
+' ranges of the chart), that is the points, the lines from the data and the bubbles without a label (a bubble
+' keeps its size, it does not depend on the axis).
 Public Sub PouzijUpravu(ByVal velikost As Double, ByVal kroky As Long, ByVal obeOsy As Boolean)
     Dim i As Long, fx As Double, fy As Double, cx As Double, cy As Double
     fx = 1# + OSA_KROK * kroky
@@ -90,9 +92,14 @@ Public Sub PouzijUpravu(ByVal velikost As Double, ByVal kroky As Long, ByVal obe
         End If
     Next i
     gCary = mZakCary
+    gBub = mZakBub
     If kroky > 0 Then
         For i = gCarTvaru + 1 To UBound(gCary)
             gCary(i) = cx + (mZakCary(i) - cx) / fx
+        Next i
+        For i = 1 To UBound(gBub)
+            gBub(i).X = cx + (mZakBub(i).X - cx) / fx
+            gBub(i).Y = cy + (mZakBub(i).Y - cy) / fy
         Next i
     End If
 End Sub

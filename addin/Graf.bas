@@ -4,7 +4,13 @@ Option Explicit
 ' Reads and writes through the PowerPoint object model; text is measured by module Pisma.
 '   chart frame = chart object model coordinates + ChartArea.Left/Top (chart margin, typically 4 pt)
 '   point       = inner plot area (PlotArea.Inside*) + linear axis (MinimumScale/MaximumScale; an automatic
-'                 bound returns the value PowerPoint draws with, verified by a probe on 9 Oct 2026)
+'                 bound returns the value PowerPoint draws with, verified by a probe on 9 Oct 2026); a date X axis
+'                 (combination chart with areas) counts in days with the point in the middle of its day when the
+'                 axis is between categories (probe of 15 Nov 2026)
+'   radius      = half the marker size, or the bubble radius (Point.Width); as an obstacle a point is a square
+'                 with half side max(3, radius) (a 6 pt marker = the former 3 pt); a bubble is an obstacle for its
+'                 own label and for the columns too, never for leader lines (PowerPoint draws a bubble's leader
+'                 line from its centre even when the label touches its edge, probe of 15 Nov 2026)
 '   label       = text width + 6 pt, lines * line spacing * size + 3 pt; PowerPoint wraps a label wider
 '                 than 20 % of the chart width
 ' Object model pitfalls (verified by a probe on 8 Oct 2026):
@@ -26,6 +32,18 @@ Private Const XL_BEZ_ZNACKY As Long = -4142
 Private Const XL_BEZ_POPISKU_OSY As Long = -4142  ' xlTickLabelPositionNone
 Private Const AUTO_VELIKOST As Long = 1        ' msoAutoSizeShapeToFitText
 Private Const TOLERANCE_ZAPISU As Double = 0.5
+Public Const BOD_MIN As Double = 3#             ' smallest half side of a point as an obstacle (6 pt marker)
+Private Const UVNITR As Double = 1#             ' a slide line or an axis inside the plot area: this far from its edge
+Private Const XL_CASOVA As Long = 3             ' xlTimeScale
+Private Const XL_DNY As Long = 0                ' xlDays
+Private Const XL_KRIZENI_VLASTNI As Long = -4114  ' xlAxisCrossesCustom
+Private Const XL_KRIZENI_MAX As Long = 2        ' xlAxisCrossesMaximum
+Private Const XL_KRIZENI_MIN As Long = 4        ' xlAxisCrossesMinimum
+Private Const XL_PLOCHA As Long = 1             ' xlArea
+Private Const XL_CARA As Long = 4               ' xlLine
+Private Const XL_CARA_ZNACKY As Long = 65       ' xlLineMarkers
+Private Const XL_POLOHA_VLASTNI As Long = 7     ' xlLabelPositionCustom
+Private Const XL_POLOHA_VPRAVO As Long = -4152  ' xlLabelPositionRight
 
 Public Type Obd
     L As Double
@@ -57,6 +75,15 @@ Public Type Popisek
     VlastniSirka As Boolean
     Serie As Long
     Bod As Long
+    R As Double              ' radius of the point: half the marker size or the bubble radius
+    Bublina As Boolean
+End Type
+
+' a bubble without a label of its own (an obstacle for labels)
+Public Type BodBubliny
+    X As Double
+    Y As Double
+    R As Double
 End Type
 
 Public Type Vady
@@ -102,6 +129,7 @@ Public Type StavGrafu
     OsaXVolna As Boolean
     OsaYVolna As Boolean
     CarTvaru As Long
+    Bub() As BodBubliny
 End Type
 
 ' state of one chart; arrays start at 1, element 0 is unused (empty list = UBound 0)
@@ -114,6 +142,7 @@ Public gCary() As Double
 Public gMaDelici As Boolean
 Public gDelici As Double
 Public gRezerva As Double
+Public gBub() As BodBubliny
 ' for the pre-adjustment (module Predupravy): the axis ranges the chart was read with, whether a range may be
 ' widened (no tick labels) and how many of the first gCary come from slide shapes (the rest move with the data)
 Public gOsaX0 As Double, gOsaX1 As Double, gOsaY0 As Double, gOsaY1 As Double
@@ -194,6 +223,58 @@ Public Function Obdelnik(ByVal i As Long) As Obd
     Obdelnik.T = gP(i).T
     Obdelnik.R = gP(i).L + gP(i).W
     Obdelnik.B = gP(i).T + gP(i).H
+End Function
+
+' Half side of point i as an obstacle: max(3, radius).
+Public Function Polomer(ByVal i As Long) As Double
+    Polomer = Max2(BOD_MIN, gP(i).R)
+End Function
+
+' How much point i is larger than a 6 pt marker: positions next to the point move away from it by that much.
+Public Function Presah(ByVal i As Long) As Double
+    Presah = Polomer(i) - BOD_MIN
+End Function
+
+' Point i as an obstacle (square), pad = extra margin.
+Public Function BodObd(ByVal i As Long, ByVal pad As Double) As Obd
+    Dim p As Double
+    p = Polomer(i) + pad
+    BodObd = NovyObd(gP(i).X - p, gP(i).Y - p, gP(i).X + p, gP(i).Y + p)
+End Function
+
+' Bubble k without a label as an obstacle (square).
+Public Function BublinaObd(ByVal k As Long, ByVal pad As Double) As Obd
+    Dim p As Double
+    p = Max2(BOD_MIN, gBub(k).R) + pad
+    BublinaObd = NovyObd(gBub(k).X - p, gBub(k).Y - p, gBub(k).X + p, gBub(k).Y + p)
+End Function
+
+' Bubbles as obstacles of the labels in columns (labelled bubbles and bubbles without a label) appended to prek.
+Public Sub PridejBubliny(prek() As Obd)
+    Dim i As Long
+    For i = 1 To UBound(gP)
+        If gP(i).Bublina Then PridejObd prek, BodObd(i, 0#)
+    Next i
+    For i = 1 To UBound(gBub)
+        PridejObd prek, BublinaObd(i, 0#)
+    Next i
+End Sub
+
+' Rectangle r is clear of the points of the other labels, the bubbles without a label and its own bubble.
+Public Function VolnoUBodu(ByVal i As Long, r As Obd) As Boolean
+    Dim j As Long
+    For j = 1 To UBound(gP)
+        If j <> i Then
+            If Prekryv(r, BodObd(j, 2#)) Then Exit Function
+        End If
+    Next j
+    For j = 1 To UBound(gBub)
+        If Prekryv(r, BublinaObd(j, 2#)) Then Exit Function
+    Next j
+    If gP(i).Bublina Then
+        If Prekryv(r, BodObd(i, 0#)) Then Exit Function
+    End If
+    VolnoUBodu = True
 End Function
 
 Public Function Prekryv(a As Obd, b As Obd, Optional ByVal pad As Double = 0#) As Boolean
@@ -310,9 +391,10 @@ End Sub
 
 ' ---------- reading from the object model ----------
 Public Function MaXYSerii(ch As Object) As Boolean
-    Dim i As Long
+    Dim i As Long, typ As Long
     For i = 1 To ch.SeriesCollection.Count
-        If JeXY(ch.SeriesCollection(i).ChartType) Then
+        typ = ch.SeriesCollection(i).ChartType
+        If JeXY(typ) Or JeBublina(typ) Then
             MaXYSerii = True
             Exit Function
         End If
@@ -324,6 +406,51 @@ Private Function JeXY(ByVal typ As Long) As Boolean
         Case -4169, 72, 73, 74, 75  ' xlXYScatter, ...Smooth, ...SmoothNoMarkers, ...Lines, ...LinesNoMarkers
             JeXY = True
     End Select
+End Function
+
+Private Function JeBublina(ByVal typ As Long) As Boolean
+    JeBublina = (typ = 15 Or typ = 87)  ' xlBubble, xlBubble3DEffect
+End Function
+
+' CategoryType of a category axis, -1 for a value axis (the property fails there).
+Private Function TypKategorie(osa As Object) As Long
+    TypKategorie = -1
+    On Error Resume Next
+    TypKategorie = osa.CategoryType
+End Function
+
+' The axis line is drawn.
+Private Function CaraOsy(osa As Object) As Boolean
+    On Error Resume Next
+    CaraOsy = (osa.Format.Line.Visible = msoTrue)
+End Function
+
+' The value on axis osa where the perpendicular axis crosses it (object model: Crosses / CrossesAt of osa).
+Private Function KrizeniOsy(osa As Object, ByVal mn As Double, ByVal mx As Double) As Double
+    Select Case osa.Crosses
+        Case XL_KRIZENI_VLASTNI
+            KrizeniOsy = osa.CrossesAt
+        Case XL_KRIZENI_MAX
+            KrizeniOsy = mx
+        Case XL_KRIZENI_MIN
+            KrizeniOsy = mn
+        Case Else  ' automatic: at zero, or at the nearer end
+            KrizeniOsy = Min2(Max2(0#, mn), mx)
+    End Select
+End Function
+
+Private Function PrumerBubliny(p As Object) As Double
+    Dim d As Double
+    On Error Resume Next  ' Point.Width: Office 2013+
+    d = p.Width
+    On Error GoTo 0
+    If Not JeNaN(d) And d > 0 Then PrumerBubliny = d
+End Function
+
+Private Function VelikostZnacky(s As Object, ByVal j As Long) As Double
+    On Error Resume Next
+    VelikostZnacky = s.Points(j).MarkerSize
+    If VelikostZnacky <= 0 Then VelikostZnacky = s.MarkerSize
 End Function
 
 ' Slide shapes (slide coordinates); charts are not obstacles, a group is an obstacle with its whole rectangle.
@@ -347,8 +474,8 @@ End Sub
 
 ' Loads the chart into the module state; returns "" or the reason why the chart is skipped.
 Public Function NactiGraf(sl As Slide, shp As Shape) As String
-    Dim ch As Object, pa As Object, osaX As Object, osaY As Object
-    Dim x0 As Double, x1 As Double, y0 As Double, y1 As Double
+    Dim ch As Object, pa As Object, osaX As Object, osaY As Object, kategorie As Long
+    Dim x0 As Double, x1 As Double, y0 As Double, y1 As Double, v As Double
     Set ch = shp.Chart
     gW = shp.Width
     gH = shp.Height
@@ -357,6 +484,7 @@ Public Function NactiGraf(sl As Slide, shp As Shape) As String
     ReDim gP(0 To 0)
     ReDim gPrek(0 To 0)
     ReDim gCary(0 To 0)
+    ReDim gBub(0 To 0)
     gMaDelici = False
     gRezerva = 0#
 
@@ -366,7 +494,21 @@ Public Function NactiGraf(sl As Slide, shp As Shape) As String
     End If
     Set osaX = ch.Axes(XL_KATEGORIE, 1)
     Set osaY = ch.Axes(XL_HODNOTY, 1)
-    If osaX.ReversePlotOrder Or osaY.ReversePlotOrder Or osaX.ScaleType = XL_LOG Or osaY.ScaleType = XL_LOG Then
+    kategorie = TypKategorie(osaX)  ' -1 = value axis (XY chart), otherwise a combination chart
+    If kategorie <> -1 Then
+        If kategorie <> XL_CASOVA Then
+            NactiGraf = "category axis without dates"
+            Exit Function
+        End If
+        If osaX.BaseUnit <> XL_DNY Then
+            NactiGraf = "date axis in months or years"
+            Exit Function
+        End If
+        If osaX.ReversePlotOrder Or osaY.ReversePlotOrder Or osaY.ScaleType = XL_LOG Then
+            NactiGraf = "reversed or logarithmic axis"
+            Exit Function
+        End If
+    ElseIf osaX.ReversePlotOrder Or osaY.ReversePlotOrder Or osaX.ScaleType = XL_LOG Or osaY.ScaleType = XL_LOG Then
         NactiGraf = "reversed or logarithmic axis"
         Exit Function
     End If
@@ -378,26 +520,38 @@ Public Function NactiGraf(sl As Slide, shp As Shape) As String
     gOsaX1 = x1
     gOsaY0 = y0
     gOsaY1 = y1
-    gOsaXVolna = (osaX.TickLabelPosition = XL_BEZ_POPISKU_OSY)
+    ' a date axis is never changed (the areas of the combination chart would move with it)
+    gOsaXVolna = (kategorie = -1) And (osaX.TickLabelPosition = XL_BEZ_POPISKU_OSY)
     gOsaYVolna = (osaY.TickLabelPosition = XL_BEZ_POPISKU_OSY)
     Set pa = ch.PlotArea
     gPL = pa.InsideLeft + gCaL
     gPT = pa.InsideTop + gCaT
     gPR = gPL + pa.InsideWidth
     gPB = gPT + pa.InsideHeight
+    Dim mx0 As Double, mx1 As Double  ' the X range the points are mapped with
+    mx0 = x0
+    mx1 = x1
+    If kategorie = XL_CASOVA Then
+        If osaX.AxisBetweenCategories Then  ' a day is a cell, the point stands in its middle
+            mx0 = x0 - 0.5
+            mx1 = x1 + 0.5
+        End If
+    End If
 
     Dim k As Long, l As Double, t As Double, r As Double, b As Double
-    For k = 1 To UBound(mTvary)  ' to chart coordinates
+    For k = 1 To UBound(mTvary)  ' to chart coordinates; lines only inside the plot area (axis arrows beside it divide nothing)
         l = mTvary(k).X - shp.Left
         t = mTvary(k).Y - shp.Top
         r = l + mTvary(k).W
         b = t + mTvary(k).H
         If mTvary(k).Cara Then
             If mTvary(k).H < 1 And mTvary(k).W > 0.5 * (gPR - gPL) Then
-                gMaDelici = True
-                gDelici = t
+                If gPT + UVNITR < t And t < gPB - UVNITR Then
+                    gMaDelici = True
+                    gDelici = t
+                End If
             ElseIf mTvary(k).W < 1 And mTvary(k).H > 0.5 * (gPB - gPT) Then
-                PridejCislo gCary, l
+                If gPL + UVNITR < l And l < gPR - UVNITR Then PridejCislo gCary, l
             End If
         ElseIf Not mTvary(k).Otoceny Then
             If Prekryv(NovyObd(l, t, r, b), NovyObd(gPL, gPT, gPR, gPB)) And _
@@ -406,21 +560,42 @@ Public Function NactiGraf(sl As Slide, shp As Shape) As String
             End If
         End If
     Next k
-    gCarTvaru = UBound(gCary)  ' vertical lines from the slide come first, lines of helper series follow
+    gCarTvaru = UBound(gCary)  ' vertical lines from the slide come first, lines from the data (axis, series) follow
 
-    Dim i As Long, j As Long, s As Object, xs As Variant, ys As Variant, dl As Object, pocet As Long
-    Dim fs As Double, nazev As String, tucne As Boolean, n As Long, motiv As String
+    ' an axis with a visible line inside the plot area (quadrants): horizontal = dividing line, vertical = like Index
+    If Not gMaDelici And CaraOsy(osaX) Then
+        v = gPT + (gPB - gPT) * (1 - (KrizeniOsy(osaY, y0, y1) - y0) / (y1 - y0))
+        If gPT + UVNITR < v And v < gPB - UVNITR Then
+            gMaDelici = True
+            gDelici = v
+        End If
+    End If
+    If kategorie = -1 And CaraOsy(osaY) Then
+        v = gPL + (gPR - gPL) * (KrizeniOsy(osaX, x0, x1) - mx0) / (mx1 - mx0)
+        If gPL + UVNITR < v And v < gPR - UVNITR Then PridejCislo gCary, v
+    End If
+
+    Dim i As Long, j As Long, s As Object, xs As Variant, ys As Variant, dl As Object, pocet As Long, typ As Long
+    Dim fs As Double, nazev As String, tucne As Boolean, n As Long, motiv As String, bub As Boolean, polo As Double
+    Dim pridano As Boolean, kandidati() As BodBubliny, nk As Long
+    ReDim kandidati(0 To 0)
     motiv = PismoMotivu(sl, False)
     For i = 1 To ch.SeriesCollection.Count
         Set s = ch.SeriesCollection(i)
-        If JeXY(s.ChartType) Then
+        typ = s.ChartType
+        If typ = XL_PLOCHA Or typ = XL_CARA Or typ = XL_CARA_ZNACKY Then
+            If Not gMaDelici Then KonstantniSerie s, y0, y1
+        ElseIf JeXY(typ) Or JeBublina(typ) Then
+            bub = JeBublina(typ)
             xs = Hodnoty(s.XValues)
             ys = Hodnoty(s.Values)
             pocet = s.Points.Count
-            If s.MarkerStyle = XL_BEZ_ZNACKY Then
-                PomocnaSerie s, xs, pocet, x0, x1
+            If Not bub And s.MarkerStyle = XL_BEZ_ZNACKY Then
+                PomocnaSerie s, xs, ys, pocet, mx0, mx1, y0, y1
             Else
                 For j = 1 To pocet
+                    If bub Then polo = PrumerBubliny(s.Points(j)) / 2 Else polo = VelikostZnacky(s, j) / 2
+                    pridano = False
                     If s.Points(j).HasDataLabel Then
                         Set dl = s.Points(j).DataLabel
                         If PopisekZBunek(dl, xs, ys, j) Then
@@ -432,7 +607,7 @@ Public Function NactiGraf(sl As Slide, shp As Shape) As String
                                 .Fs = fs
                                 .FsPuvodni = fs
                                 .Pismo = PismoIndex(nazev, tucne)
-                                .X = gPL + (gPR - gPL) * (CDbl(xs(j)) - x0) / (x1 - x0)
+                                .X = gPL + (gPR - gPL) * (CDbl(xs(j)) - mx0) / (mx1 - mx0)
                                 .Y = gPT + (gPB - gPT) * (1 - (CDbl(ys(j)) - y0) / (y1 - y0))
                                 .L = dl.Left + gCaL
                                 .T = dl.Top + gCaT
@@ -444,36 +619,108 @@ Public Function NactiGraf(sl As Slide, shp As Shape) As String
                                 .H = dl.Height
                                 .Serie = i
                                 .Bod = j
+                                .R = polo
+                                .Bublina = bub
                             End With
+                            pridano = True
+                        End If
+                    End If
+                    If bub And Not pridano And polo > 0 And j <= UBound(xs) And j <= UBound(ys) Then
+                        If JeCislo(xs(j)) And JeCislo(ys(j)) Then
+                            nk = nk + 1
+                            ReDim Preserve kandidati(0 To nk)
+                            kandidati(nk).X = gPL + (gPR - gPL) * (CDbl(xs(j)) - mx0) / (mx1 - mx0)
+                            kandidati(nk).Y = gPT + (gPB - gPT) * (1 - (CDbl(ys(j)) - y0) / (y1 - y0))
+                            kandidati(nk).R = polo
                         End If
                     End If
                 Next j
             End If
         End If
     Next i
+    Dim drzet As Boolean  ' a bubble without a label is an obstacle unless an equal or larger one covers it
+    For k = 1 To nk
+        drzet = True
+        For j = 1 To UBound(gP)
+            If gP(j).Bublina Then
+                If StejnaBublina(gP(j).X, gP(j).Y, gP(j).R, kandidati(k)) Then drzet = False
+            End If
+        Next j
+        For j = 1 To UBound(gBub)
+            If StejnaBublina(gBub(j).X, gBub(j).Y, gBub(j).R, kandidati(k)) Then drzet = False
+        Next j
+        If drzet Then
+            ReDim Preserve gBub(0 To UBound(gBub) + 1)
+            gBub(UBound(gBub)) = kandidati(k)
+        End If
+    Next k
 End Function
 
-' A series without markers and with all x equal = vertical line (Index 80/100/120); with labels it
-' reserves space at the top of the chart.
-Private Sub PomocnaSerie(s As Object, xs As Variant, ByVal pocet As Long, ByVal x0 As Double, ByVal x1 As Double)
-    Dim j As Long, prvni As Boolean, gx As Double, stejne As Boolean, popisky As Boolean
-    stejne = True
+Private Function StejnaBublina(ByVal x As Double, ByVal y As Double, ByVal r As Double, b As BodBubliny) As Boolean
+    StejnaBublina = Abs(x - b.X) < 0.001 And Abs(y - b.Y) < 0.001 And r >= b.R
+End Function
+
+' A series without markers: all x equal = vertical line (Index 80/100/120, a quadrant border), with labels it
+' reserves space at the top of the chart; all y equal = horizontal line (dividing line). Only points with both
+' values count.
+Private Sub PomocnaSerie(s As Object, xs As Variant, ys As Variant, ByVal pocet As Long, ByVal x0 As Double, _
+                         ByVal x1 As Double, ByVal y0 As Double, ByVal y1 As Double)
+    Dim j As Long, n As Long, gx As Double, gy As Double, stejneX As Boolean, stejneY As Boolean, popisky As Boolean
+    Dim v As Double
+    stejneX = True
+    stejneY = True
     For j = 1 To pocet
-        If j > UBound(xs) Then Exit For
-        If JeCislo(xs(j)) Then
-            If Not prvni Then
-                prvni = True
-                gx = xs(j)
-            ElseIf xs(j) <> gx Then
-                stejne = False
+        If j <= UBound(xs) And j <= UBound(ys) Then
+            If JeCislo(xs(j)) And JeCislo(ys(j)) Then
+                n = n + 1
+                If n = 1 Then
+                    gx = xs(j)
+                    gy = ys(j)
+                Else
+                    If xs(j) <> gx Then stejneX = False
+                    If ys(j) <> gy Then stejneY = False
+                End If
             End If
         End If
         If s.Points(j).HasDataLabel Then popisky = True
     Next j
-    If prvni And stejne Then
+    If n >= 1 And stejneX Then
         PridejCislo gCary, gPL + (gPR - gPL) * (gx - x0) / (x1 - x0)
         If popisky Then gRezerva = REZERVA_INDEX
+    ElseIf n >= 2 And stejneY And Not gMaDelici Then
+        v = gPT + (gPB - gPT) * (1 - (gy - y0) / (y1 - y0))
+        If gPT + UVNITR < v And v < gPB - UVNITR Then
+            gMaDelici = True
+            gDelici = v
+        End If
     End If
+End Sub
+
+' An area or line series with one value everywhere (an average) = dividing line.
+Private Sub KonstantniSerie(s As Object, ByVal y0 As Double, ByVal y1 As Double)
+    Dim hod As Variant, j As Long, n As Long, prvni As Double, stejne As Boolean, v As Double
+    On Error GoTo Konec  ' a series without values
+    hod = Hodnoty(s.Values)
+    On Error GoTo 0
+    stejne = True
+    For j = 1 To UBound(hod)
+        If JeCislo(hod(j)) Then
+            n = n + 1
+            If n = 1 Then
+                prvni = hod(j)
+            ElseIf hod(j) <> prvni Then
+                stejne = False
+            End If
+        End If
+    Next j
+    If n >= 2 And stejne Then
+        v = gPT + (gPB - gPT) * (1 - (prvni - y0) / (y1 - y0))
+        If gPT + UVNITR < v And v < gPB - UVNITR Then
+            gMaDelici = True
+            gDelici = v
+        End If
+    End If
+Konec:
 End Sub
 
 Private Function PopisekZBunek(dl As Object, xs As Variant, ys As Variant, ByVal j As Long) As Boolean
@@ -493,15 +740,21 @@ Private Sub VlastnostiPisma(dl As Object, sl As Slide, ByVal motiv As String, By
                             ByRef nazev As String, ByRef tucne As Boolean)
     Dim f As Object, b As Long
     On Error Resume Next
-    Set f = dl.Format.TextFrame2.TextRange.Font
-    fs = f.Size
-    nazev = f.Name
-    b = f.Bold
-    If fs < 1 Or fs > 4000 Or nazev = "" Or b = -2 Then  ' mixed formatting: first run of the text
-        Set f = dl.Format.TextFrame2.TextRange.Runs(1).Font
-        If fs < 1 Or fs > 4000 Then fs = f.Size
-        If nazev = "" Then nazev = f.Name
-        If b = -2 Then b = f.Bold
+    If PrazdnyText(dl) Then  ' the chart font of the label (ChartFont)
+        fs = dl.Font.Size
+        nazev = dl.Font.Name
+        If dl.Font.Bold Then b = msoTrue Else b = msoFalse
+    Else
+        Set f = dl.Format.TextFrame2.TextRange.Font
+        fs = f.Size
+        nazev = f.Name
+        b = f.Bold
+        If fs < 1 Or fs > 4000 Or nazev = "" Or b = -2 Then  ' mixed formatting: first run of the text
+            Set f = dl.Format.TextFrame2.TextRange.Runs(1).Font
+            If fs < 1 Or fs > 4000 Then fs = f.Size
+            If nazev = "" Then nazev = f.Name
+            If b = -2 Then b = f.Bold
+        End If
     End If
     On Error GoTo 0
     If fs < 1 Or fs > 4000 Then fs = 10#
@@ -530,15 +783,24 @@ End Function
 Public Function ZapisGraf(shp As Shape) As Long
     Dim ch As Object, dl As Object, tf As Object, i As Long
     Set ch = shp.Chart
+    For i = 1 To UBound(gP)  ' leader lines of the series: a label in a column would hang without a link to its point
+        If gP(i).Rezim <> "N" Then ZapniVodiciCary ch.SeriesCollection(gP(i).Serie)
+    Next i
+    VratPrazdne ch
     For i = 1 To UBound(gP)
         Set dl = ch.SeriesCollection(gP(i).Serie).Points(gP(i).Bod).DataLabel
         Set tf = dl.Format.TextFrame2
-        If gP(i).Fs <> gP(i).FsPuvodni Then tf.TextRange.Font.Size = gP(i).Fs
+        If gP(i).Fs <> gP(i).FsPuvodni Then
+            If PrazdnyText(dl) Then dl.Font.Size = gP(i).Fs Else tf.TextRange.Font.Size = gP(i).Fs
+        End If
         If gP(i).Rezim <> "N" Then  ' "N" = not placed by the fallback: original position and size, only the font
             If gP(i).VlastniSirka Then  ' without a custom width PowerPoint would wrap a long label
                 dl.Width = gP(i).W
                 dl.Height = gP(i).H
-            ElseIf tf.AutoSize <> AUTO_VELIKOST Then  ' manual size from an earlier run: back to automatic
+            ElseIf tf.AutoSize <> AUTO_VELIKOST Or Abs(dl.Width - gP(i).W) > TOLERANCE_ZAPISU Or _
+                   Abs(dl.Height - gP(i).H) > TOLERANCE_ZAPISU Then
+                ' manual size (an earlier run, or the author): back to automatic; AutoSize reports 1 even for a
+                ' size set by hand and only assigning it again resets the size (probe of 15 Nov 2026)
                 tf.AutoSize = AUTO_VELIKOST
             End If
             dl.Left = gP(i).L - gCaL  ' last: Width moves Left; writing Left forces the size to be recalculated
@@ -557,6 +819,44 @@ Public Function ZapisGraf(shp As Shape) As Long
         End If
     Next i
 End Function
+
+Private Sub ZapniVodiciCary(s As Object)
+    On Error Resume Next  ' Series.HasLeaderLines: Office 2013+
+    If Not s.HasLeaderLines Then s.HasLeaderLines = True
+End Sub
+
+' Empty labels (no text) the author moved away from their points: once the labels around them move, their
+' leader lines hang in the air (bubble charts with a grey series under the coloured ones, sample of 15 Nov 2026).
+' They go back to their default position, where PowerPoint draws no leader line.
+Private Sub VratPrazdne(ch As Object)
+    Dim i As Long, j As Long, s As Object, dl As Object, typ As Long, pozice As Long, txt As String, l As Double
+    For i = 1 To ch.SeriesCollection.Count
+        Set s = ch.SeriesCollection(i)
+        typ = s.ChartType
+        If JeBublina(typ) Or JeXY(typ) Then
+            If JeBublina(typ) Or s.MarkerStyle <> XL_BEZ_ZNACKY Then
+                For j = 1 To s.Points.Count
+                    If s.Points(j).HasDataLabel Then
+                        Set dl = s.Points(j).DataLabel
+                        txt = "x"
+                        l = 0#
+                        pozice = 0
+                        On Error Resume Next  ' read into variables: an error inside an If would enter its branch
+                        txt = dl.Text
+                        l = dl.Left
+                        pozice = dl.Position
+                        On Error GoTo 0
+                        If Len(txt) = 0 And Not JeNaN(l) And pozice = XL_POLOHA_VLASTNI Then
+                            On Error Resume Next
+                            dl.Position = XL_POLOHA_VPRAVO
+                            On Error GoTo 0
+                        End If
+                    End If
+                Next j
+            End If
+        End If
+    Next i
+End Sub
 
 ' ---------- the state put aside ----------
 Public Sub UlozStav(s As StavGrafu)
@@ -581,6 +881,7 @@ Public Sub UlozStav(s As StavGrafu)
     s.OsaXVolna = gOsaXVolna
     s.OsaYVolna = gOsaYVolna
     s.CarTvaru = gCarTvaru
+    s.Bub = gBub
 End Sub
 
 Public Sub ObnovStav(s As StavGrafu)
@@ -605,6 +906,7 @@ Public Sub ObnovStav(s As StavGrafu)
     gOsaXVolna = s.OsaXVolna
     gOsaYVolna = s.OsaYVolna
     gCarTvaru = s.CarTvaru
+    gBub = s.Bub
 End Sub
 
 ' ---------- font size and defects ----------
@@ -663,20 +965,21 @@ Public Function SjednotPismo(ByRef zmeneno As Long) As Double
     Next i
 End Function
 
-' The most common font size of the data labels of a chart that is not laid out (XY series with markers), 0 = no
-' label or a chart that cannot be read. A light read: no geometry, only the size.
+' The most common font size of the data labels of a chart that is not laid out (XY series with markers and bubble
+' series, labels PowerPoint draws), 0 = no label or a chart that cannot be read. A light read: no geometry,
+' only the size.
 Public Function PismoPopisku(ch As Object) As Double
     Dim i As Long, j As Long, s As Object, dl As Object, n As Long, fs() As Double, v As Double
     On Error GoTo Konec
     ReDim fs(1 To 16)
     For i = 1 To ch.SeriesCollection.Count
         Set s = ch.SeriesCollection(i)
-        If JeXY(s.ChartType) Then
-            If s.MarkerStyle <> XL_BEZ_ZNACKY Then
+        If JeXY(s.ChartType) Or JeBublina(s.ChartType) Then
+            If JeBublina(s.ChartType) Or s.MarkerStyle <> XL_BEZ_ZNACKY Then
                 For j = 1 To s.Points.Count
                     If s.Points(j).HasDataLabel Then
                         Set dl = s.Points(j).DataLabel
-                        If Len(dl.Text) > 0 Then
+                        If Len(dl.Text) > 0 And Not JeNaN(dl.Left) Then
                             v = VelikostPopisku(dl)
                             If v > 0 Then
                                 n = n + 1
@@ -696,9 +999,20 @@ End Function
 Private Function VelikostPopisku(dl As Object) As Double
     Dim v As Double
     On Error Resume Next
-    v = dl.Format.TextFrame2.TextRange.Font.Size
-    If v < 1 Or v > 4000 Then v = dl.Format.TextFrame2.TextRange.Runs(1).Font.Size  ' mixed formatting: first run
+    If PrazdnyText(dl) Then
+        v = dl.Font.Size
+    Else
+        v = dl.Format.TextFrame2.TextRange.Font.Size
+        If v < 1 Or v > 4000 Then v = dl.Format.TextFrame2.TextRange.Runs(1).Font.Size  ' mixed formatting: first run
+    End If
     If v >= 1 And v <= 4000 Then VelikostPopisku = v
+End Function
+
+' The text frame of a label with text can be empty (length 0, no runs); its font then reports the default 18 pt
+' while the label is drawn with the chart font of the label, DataLabel.Font (probe of 15 Nov 2026).
+Private Function PrazdnyText(dl As Object) As Boolean
+    On Error Resume Next
+    PrazdnyText = (dl.Format.TextFrame2.TextRange.Length = 0)
 End Function
 
 Public Function SpocitejVady() As Vady
@@ -715,6 +1029,13 @@ Public Function SpocitejVady() As Vady
         If Not (ra.L >= gPL - 0.5 And ra.R <= gPR + 0.5 And ra.T >= gPT - 0.5 And ra.B <= gPB + 0.5) Then
             v.MimoGraf = v.MimoGraf + 1
         End If
+        ' a point is a square max(3, radius); its own point counts only for a bubble, bubbles without a label too
+        For k = 1 To UBound(gBub)
+            If Prekryv(ra, BublinaObd(k, 0#), -0.5) Then v.PopisekPresBod = v.PopisekPresBod + 1
+        Next k
+        If gP(i).Bublina Then
+            If Prekryv(ra, BodObd(i, 0#), -0.5) Then v.PopisekPresBod = v.PopisekPresBod + 1
+        End If
         For k = 1 To UBound(gPrek)
             If Prekryv(ra, gPrek(k), -0.5) Then v.PopisekPresBox = v.PopisekPresBox + 1
         Next k
@@ -724,7 +1045,7 @@ Public Function SpocitejVady() As Vady
                 If j > i Then
                     If Prekryv(ra, Obdelnik(j), -0.5) Then v.PrekryvPopisku = v.PrekryvPopisku + 1
                 End If
-                If Prekryv(ra, NovyObd(gP(j).X - 3, gP(j).Y - 3, gP(j).X + 3, gP(j).Y + 3), -0.5) Then
+                If Prekryv(ra, BodObd(j, 0#), -0.5) Then
                     v.PopisekPresBod = v.PopisekPresBod + 1
                 End If
                 If CestaPres(cesty(j), ra, 1#) Then v.CaraPresPopisek = v.CaraPresPopisek + 1

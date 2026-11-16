@@ -50,12 +50,14 @@ Public Function PismoIndex(ByVal nazev As String, ByVal tucne As Boolean) As Lon
         End If
     Next i
     If mDC = 0 Then mDC = CreateCompatibleDC(0)
-    Dim f As LongPtr, nahradni As Boolean
+    ' the local flag must not sound like the constant NAHRADNI (VBA ignores case): up to 0.8.0 it hid the
+    ' constant and a missing font was measured with the font "False", that is Arial (found on 15 Nov 2026)
+    Dim f As LongPtr, zamena As Boolean
     f = Vytvor(nazev, tucne)
     If StrComp(TvarPisma(), nazev, vbTextCompare) <> 0 Then
         DeleteObject f
         f = Vytvor(NAHRADNI, tucne)
-        nahradni = StrComp(nazev, NAHRADNI, vbTextCompare) <> 0
+        zamena = StrComp(nazev, NAHRADNI, vbTextCompare) <> 0
     End If
     mPocet = mPocet + 1
     ReDim Preserve mKlic(1 To mPocet)
@@ -66,7 +68,7 @@ Public Function PismoIndex(ByVal nazev As String, ByVal tucne As Boolean) As Lon
     mKlic(mPocet) = klic
     mNazev(mPocet) = nazev
     mFont(mPocet) = f
-    mNahradni(mPocet) = nahradni
+    mNahradni(mPocet) = zamena
     mRadek(mPocet) = Radkovani()
     PismoIndex = mPocet
 End Function

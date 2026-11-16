@@ -105,21 +105,22 @@ Public Function VPlose(r As Obd) As Boolean
 End Function
 
 Private Function Primo(ByVal i As Long, uml() As Long, ByRef l As Double, ByRef t As Double) As Boolean
-    Dim x As Double, y As Double, w As Double, h As Double, g As Double, k As Long, j As Long, r As Obd, volno As Boolean
-    Dim kl(1 To 8) As Double, kt(1 To 8) As Double
+    Dim x As Double, y As Double, w As Double, h As Double, g As Double, e As Double, k As Long, j As Long, r As Obd
+    Dim kl(1 To 8) As Double, kt(1 To 8) As Double, volno As Boolean
     x = gP(i).X
     y = gP(i).Y
     w = gP(i).W
     h = gP(i).H
-    g = VYCHOZI_ODSAZENI
+    g = VYCHOZI_ODSAZENI + Presah(i)  ' from the edge of the point as with a 6 pt marker
+    e = 3 + Presah(i)
     kl(1) = x + g: kt(1) = y - h / 2  ' order = preference
     kl(2) = x - g - w: kt(2) = y - h / 2
     kl(3) = x - w / 2: kt(3) = y - g - h
     kl(4) = x - w / 2: kt(4) = y + g
-    kl(5) = x + 3: kt(5) = y - 3 - h
-    kl(6) = x + 3: kt(6) = y + 3
-    kl(7) = x - 3 - w: kt(7) = y - 3 - h
-    kl(8) = x - 3 - w: kt(8) = y + 3
+    kl(5) = x + e: kt(5) = y - e - h
+    kl(6) = x + e: kt(6) = y + e
+    kl(7) = x - e - w: kt(7) = y - e - h
+    kl(8) = x - e - w: kt(8) = y + e
     For k = 1 To 8
         r = NovyObd(kl(k), kt(k), kl(k) + w, kt(k) + h)
         volno = VPlose(r)
@@ -132,16 +133,7 @@ Private Function Primo(ByVal i As Long, uml() As Long, ByRef l As Double, ByRef 
                 End If
             Next j
         End If
-        If volno Then
-            For j = 1 To UBound(gP)
-                If j <> i Then
-                    If Prekryv(r, NovyObd(gP(j).X - 3 - 2, gP(j).Y - 3 - 2, gP(j).X + 3 + 2, gP(j).Y + 3 + 2)) Then
-                        volno = False
-                        Exit For
-                    End If
-                End If
-            Next j
-        End If
+        If volno Then volno = VolnoUBodu(i, r)
         If volno Then
             For j = 1 To UBound(uml)
                 If Prekryv(r, Obdelnik(uml(j)), 1.5) Then
@@ -170,6 +162,7 @@ Private Function Sloupce(zbytek() As Long, uml() As Long, ByVal mezera As Double
     For m = 1 To UBound(uml)
         PridejObd prek, Obdelnik(uml(m))
     Next m
+    PridejBubliny prek
     poradi = zbytek
     ReDim klic(0 To n)
     For m = 1 To n
@@ -215,7 +208,7 @@ Private Function Sloupce(zbytek() As Long, uml() As Long, ByVal mezera As Double
                 kandS(k + m) = "R"
             Next m
         End If
-        If prvni Or celkem < nejCena Then
+        If prvni Or celkem < nejCena - EPS Then  ' a tie (a point midway between two lines) goes to the first: VBA and Python round differently
             prvni = False
             nejCena = celkem
             nejOk = okVse
@@ -239,10 +232,15 @@ Private Sub NejlepsiSloupec(ByVal strana As String, skupina() As Long, prek() As
     n = UBound(skupina)
     loVse = gPT + Max2(OKRAJ, gRezerva)
     hiVse = gPB - OKRAJ
-    zaklad = gP(skupina(1)).X
+    ' from the edge of the outermost point (bubble); a 6 pt marker from its centre as before
+    If strana = "L" Then zaklad = gP(skupina(1)).X - Presah(skupina(1)) Else zaklad = gP(skupina(1)).X + Presah(skupina(1))
     maxW = gP(skupina(1)).W
     For m = 2 To n
-        If strana = "L" Then zaklad = Min2(zaklad, gP(skupina(m)).X) Else zaklad = Max2(zaklad, gP(skupina(m)).X)
+        If strana = "L" Then
+            zaklad = Min2(zaklad, gP(skupina(m)).X - Presah(skupina(m)))
+        Else
+            zaklad = Max2(zaklad, gP(skupina(m)).X + Presah(skupina(m)))
+        End If
         maxW = Max2(maxW, gP(skupina(m)).W)
     Next m
     If strana = "L" Then zaklad = zaklad - MEZERA_SLOUPCE Else zaklad = zaklad + MEZERA_SLOUPCE
@@ -294,7 +292,7 @@ Private Sub NejlepsiSloupec(ByVal strana As String, skupina() As Long, prek() As
             Next i
         End If
         cena = CenaSkupiny(skupina) + IIf(ok, 0#, NEVEJDE_SE)
-        If prvni Or cena < nejCena Then
+        If prvni Or cena < nejCena - EPS Then  ' a tie goes to the first candidate (as in Python)
             prvni = False
             nejCena = cena
             nejOk = ok

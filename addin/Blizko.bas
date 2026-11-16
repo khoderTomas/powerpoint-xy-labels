@@ -98,7 +98,7 @@ Private mGs() As Long, mGa() As Long, mGk() As Long
 ' Rezim "N" and their original position on the grid. Returns the number of labels not placed.
 Public Function ZlepsiBlizko(ByVal mezera As Double, Optional ByVal nouze As Boolean = False) As Long
     Dim i As Long, vyska As Double, krok As Double, starty() As Long, p As Poloha
-    Dim puv() As Popisek, puvPrek() As Obd, puvCary() As Double
+    Dim puv() As Popisek, puvPrek() As Obd, puvCary() As Double, puvBub() As BodBubliny
     Dim pl As Double, pt As Double, pr As Double, pb As Double, rez As Double, del As Double
     mN = UBound(gP)
     If mN = 0 Then Exit Function
@@ -108,6 +108,7 @@ Public Function ZlepsiBlizko(ByVal mezera As Double, Optional ByVal nouze As Boo
     puv = gP
     puvPrek = gPrek
     puvCary = gCary
+    puvBub = gBub
     pl = gPL
     pt = gPT
     pr = gPR
@@ -126,6 +127,11 @@ Public Function ZlepsiBlizko(ByVal mezera As Double, Optional ByVal nouze As Boo
     For i = 1 To UBound(gPrek)
         gPrek(i) = NovyObd(Mrizka(gPrek(i).L), Mrizka(gPrek(i).T), Mrizka(gPrek(i).R), Mrizka(gPrek(i).B))
     Next i
+    For i = 1 To UBound(gBub)
+        gBub(i).X = Mrizka(gBub(i).X)
+        gBub(i).Y = Mrizka(gBub(i).Y)
+        gBub(i).R = Mrizka(gBub(i).R)
+    Next i
     For i = 1 To mN
         gP(i).X = Mrizka(gP(i).X)
         gP(i).Y = Mrizka(gP(i).Y)
@@ -133,6 +139,7 @@ Public Function ZlepsiBlizko(ByVal mezera As Double, Optional ByVal nouze As Boo
         gP(i).H = Mrizka(gP(i).H)
         gP(i).L = Mrizka(gP(i).L)
         gP(i).T = Mrizka(gP(i).T)
+        gP(i).R = Mrizka(gP(i).R)
     Next i
     mMez = mezera - REZERVA_MEZERY  ' conflict = labels closer than the gap the columns used
     vyska = gP(1).H
@@ -170,6 +177,7 @@ Public Function ZlepsiBlizko(ByVal mezera As Double, Optional ByVal nouze As Boo
     gP = puv
     gPrek = puvPrek
     gCary = puvCary
+    gBub = puvBub
     gPL = pl
     gPT = pt
     gPR = pr
@@ -306,7 +314,7 @@ End Sub
 Private Sub NajdiPolohy(ByVal i As Long, ByVal krok As Double)
     Dim x As Double, y As Double, w As Double, h As Double, l0 As Double, t0 As Double, horni As Double
     Dim k0 As Long, k1 As Long, k As Long, a As Long, d As Long, m As Long, c As Long, n As Long
-    Dim t As Double, sik As Double, posun(1 To 3) As Double, r As Obd, platny As Boolean
+    Dim t As Double, sik As Double, posun(1 To 3) As Double, r As Obd, platny As Boolean, e As Double
     Dim pp() As Poloha, cena() As Double, idx() As Long, p As Poloha
     x = gP(i).X
     y = gP(i).Y
@@ -314,6 +322,7 @@ Private Sub NajdiPolohy(ByVal i As Long, ByVal krok As Double)
     h = gP(i).H
     l0 = gP(i).L
     t0 = gP(i).T
+    e = Presah(i)  ' positions next to the point from its edge (bubble), a 6 pt marker as before
     mGn = 0
     ReDim mGl(1 To 256)
     ReDim mGt(1 To 256)
@@ -321,14 +330,14 @@ Private Sub NajdiPolohy(ByVal i As Long, ByVal krok As Double)
     ReDim mGs(1 To 256)
     ReDim mGa(1 To 256)
     ReDim mGk(1 To 256)
-    Generuj x + 6, y - h / 2, 0#, 0, 0, 0
-    Generuj x - 6 - w, y - h / 2, 0.5, 0, 0, 0
-    Generuj x - w / 2, y - 6 - h, 1#, 0, 0, 0
-    Generuj x - w / 2, y + 6, 1.5, 0, 0, 0
-    Generuj x + 3, y - 3 - h, 2#, 0, 0, 0
-    Generuj x + 3, y + 3, 2.5, 0, 0, 0
-    Generuj x - 3 - w, y - 3 - h, 3#, 0, 0, 0
-    Generuj x - 3 - w, y + 3, 3.5, 0, 0, 0
+    Generuj x + e + 6, y - h / 2, 0#, 0, 0, 0
+    Generuj x - e - 6 - w, y - h / 2, 0.5, 0, 0, 0
+    Generuj x - w / 2, y - e - 6 - h, 1#, 0, 0, 0
+    Generuj x - w / 2, y + e + 6, 1.5, 0, 0, 0
+    Generuj x + e + 3, y - e - 3 - h, 2#, 0, 0, 0
+    Generuj x + e + 3, y + e + 3, 2.5, 0, 0, 0
+    Generuj x - e - 3 - w, y - e - 3 - h, 3#, 0, 0, 0
+    Generuj x - e - 3 - w, y + e + 3, 3.5, 0, 0, 0
     horni = gPT + Max2(OKRAJ, gRezerva)
     k0 = -Int(-((y - h / 2 - POSUN_MAX - horni) / krok))
     If k0 < 0 Then k0 = 0
@@ -337,8 +346,8 @@ Private Sub NajdiPolohy(ByVal i As Long, ByVal krok As Double)
         For k = k0 To k1
             t = horni + k * krok
             sik = SIKMO * Abs(t + h / 2 - y)
-            Generuj x + mDX(a), t, sik, 1, a, k
-            Generuj x - mDX(a) - w, t, VLEVO + sik, 2, a, k
+            Generuj x + e + mDX(a), t, sik, 1, a, k
+            Generuj x - e - mDX(a) - w, t, VLEVO + sik, 2, a, k
         Next k
     Next a
     For k = k0 To k1  ' elsewhere in its own column
@@ -346,13 +355,13 @@ Private Sub NajdiPolohy(ByVal i As Long, ByVal krok As Double)
         Generuj l0, t, SIKMO * Abs(t + h / 2 - y), 3, 0, k
     Next k
     sik = SIKMO * Abs(t0 + h / 2 - y)
-    If l0 > x Then  ' closer to the point in its own row (column on the right)
-        For d = 12 To Int(l0 - x) - 1 Step 3
-            Generuj x + d, t0, sik, 0, 0, 0
+    If l0 > x + e Then  ' closer to the point in its own row (column on the right)
+        For d = 12 To Int(l0 - x - e) - 1 Step 3
+            Generuj x + e + d, t0, sik, 0, 0, 0
         Next d
-    ElseIf l0 + w < x Then  ' column on the left
-        For d = 12 To Int(x - l0 - w) - 1 Step 3
-            Generuj x - d - w, t0, VLEVO + sik, 0, 0, 0
+    ElseIf l0 + w < x - e Then  ' column on the left
+        For d = 12 To Int(x - e - l0 - w) - 1 Step 3
+            Generuj x - e - d - w, t0, VLEVO + sik, 0, 0, 0
         Next d
     End If
     posun(1) = 0#
@@ -360,8 +369,8 @@ Private Sub NajdiPolohy(ByVal i As Long, ByVal krok As Double)
     posun(3) = w / 2 - 8
     For d = 0 To POCET_DV - 1
         For m = 1 To 3
-            Generuj x - w / 2 + posun(m), y - mDV(d) - h, NAD_POD, 0, 0, 0
-            Generuj x - w / 2 + posun(m), y + mDV(d), NAD_POD, 0, 0, 0
+            Generuj x - w / 2 + posun(m), y - e - mDV(d) - h, NAD_POD, 0, 0, 0
+            Generuj x - w / 2 + posun(m), y + e + mDV(d), NAD_POD, 0, 0, 0
         Next m
     Next d
 
@@ -431,12 +440,7 @@ Private Function Volno(ByVal i As Long, r As Obd) As Boolean
     For j = 1 To UBound(gPrek)
         If Prekryv(r, gPrek(j), 2#) Then Exit Function
     Next j
-    For j = 1 To UBound(gP)
-        If j <> i Then
-            If Prekryv(r, NovyObd(gP(j).X - 3 - 2, gP(j).Y - 3 - 2, gP(j).X + 3 + 2, gP(j).Y + 3 + 2)) Then Exit Function
-        End If
-    Next j
-    Volno = True
+    Volno = VolnoUBodu(i, r)  ' as Rozlozeni.Primo
 End Function
 
 ' Position with its cost (preference + leader line length + leader across vertical lines); False = leader across a box.

@@ -16,7 +16,7 @@ Private Declare PtrSafe Function MessageBoxW Lib "user32" (ByVal hWnd As LongPtr
     ByVal lpCaption As LongPtr, ByVal uType As Long) As Long
 Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (ByRef Destination As Any, ByRef Source As Any, ByVal Length As LongPtr)
 
-Private Const VERZE As String = "0.8.0"
+Private Const VERZE As String = "0.9.0"
 Private Const NAZEV_DOPLNKU As String = "RozmistiPopisky"  ' file name, TEMP folder and settings key: not translated
 Private Const TITULEK As String = "Lay out labels"
 Private Const PRIPONA As String = "-labels"
@@ -832,7 +832,8 @@ Private Function GeometrieJson() As String
         If i > 1 Then s = s & ","
         s = s & "{""text"":" & TextJson(gP(i).Txt) & ",""left"":" & CisloJson(gP(i).L) & ",""top"":" & CisloJson(gP(i).T) & _
             ",""w"":" & CisloJson(gP(i).W) & ",""h"":" & CisloJson(gP(i).H) & ",""fs"":" & CisloJson(gP(i).Fs) & _
-            ",""x"":" & CisloJson(gP(i).X) & ",""y"":" & CisloJson(gP(i).Y) & ",""rezim"":" & TextJson(gP(i).Rezim) & "}"
+            ",""x"":" & CisloJson(gP(i).X) & ",""y"":" & CisloJson(gP(i).Y) & ",""r"":" & CisloJson(gP(i).R) & _
+            ",""rezim"":" & TextJson(gP(i).Rezim) & "}"
     Next i
     GeometrieJson = s & "]"
 End Function
@@ -858,12 +859,18 @@ Private Function ModelJson(ByVal mezera As Double, startL() As Double, startT() 
         If i > 1 Then s = s & ","
         s = s & "[" & HexJson(gPrek(i).L) & "," & HexJson(gPrek(i).T) & "," & HexJson(gPrek(i).R) & "," & HexJson(gPrek(i).B) & "]"
     Next i
+    s = s & "],""bubliny"":["
+    For i = 1 To UBound(gBub)
+        If i > 1 Then s = s & ","
+        s = s & "[" & HexJson(gBub(i).X) & "," & HexJson(gBub(i).Y) & "," & HexJson(gBub(i).R) & "]"
+    Next i
     s = s & "],""popisky"":["
     For i = 1 To UBound(gP)
         If i > 1 Then s = s & ","
         s = s & "{""text"":" & TextJson(gP(i).Txt) & ",""x"":" & HexJson(gP(i).X) & ",""y"":" & HexJson(gP(i).Y) & _
             ",""w"":" & HexJson(startW(i)) & ",""h"":" & HexJson(startH(i)) & ",""l0"":" & HexJson(startL(i)) & _
             ",""t0"":" & HexJson(startT(i)) & ",""l"":" & HexJson(gP(i).L) & ",""t"":" & HexJson(gP(i).T) & _
+            ",""r"":" & HexJson(gP(i).R) & ",""bublina"":" & IIf(gP(i).Bublina, "true", "false") & _
             ",""rezim"":" & TextJson(gP(i).Rezim)
         If nouze Then
             s = s & ",""pl"":" & HexJson(puvL(i)) & ",""pt"":" & HexJson(puvT(i)) & ",""pw"":" & HexJson(puvW(i)) & _

@@ -68,4 +68,11 @@ browser (`name-check.html` when the open presentation was edited).
   possible next to their points. Labels that still do not fit stay where they were and the report lists
   them for manual fine-tuning. When fewer than half of the labels fit, the chart stays unchanged and the
   report marks it.
+- Bubble charts are laid out too: labels keep clear of the bubbles and a label right next to its bubble starts
+  at the bubble's edge. So are charts that combine coloured areas with an XY series on a date axis. Axes that
+  cross inside the chart, and an area or line with a single value (an average), count as dividing lines: a label
+  stays on the same side as its point.
+- Labels in columns need leader lines, so the add-in switches them on for every series whose labels it lays out.
+  Empty labels that were dragged away from their points go back to their default position, otherwise their
+  leader lines would point into empty space.
 - The resulting labels are ordinary PowerPoint labels; they can still be moved with the mouse.

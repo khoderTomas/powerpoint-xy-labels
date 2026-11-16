@@ -29,11 +29,18 @@ source and the file name of the add-in are Czech.
 ## What it handles
 
 - XY scatter charts with data labels (typically "Value From Cells" labels with leader lines).
+- Bubble charts: bubbles are obstacles for labels (not for leader lines), a label next to its bubble starts at
+  the bubble's edge, bubble sizes come from `Point.Width`.
+- Combination charts with areas or lines and an XY series on a date axis in days (points in the middle of their
+  day); text category axes and dates in months or years are skipped.
 - Linear axes with fixed or automatic bounds. Reversed and logarithmic axes are skipped.
 - Charts inside groups (unrotated), other shapes on the slide as obstacles, vertical reference lines
-  (a series without markers whose points share one x value) and a horizontal quadrant divider (a connector).
+  (a series without markers whose points share one x value) and a horizontal quadrant divider: a connector
+  inside the plot area, an axis with a visible line crossing inside the plot area, a horizontal series without
+  markers, or an area or line with a single value.
+- Leader lines are switched on for every series whose labels are laid out; empty labels dragged away from their
+  points go back to their default position.
 - A slide with `#labels-off` in its notes is skipped.
-- Not handled yet: bubble charts.
 
 ## How it works
 
@@ -103,6 +110,11 @@ non-ASCII characters into `ChrW()` calls; comments must be plain ASCII.
 - After a font change a label returns its old `Width/Height` and `Chart.Refresh` does not help. Writing `Left`
   forces the recalculation, so the position is written last. Writing `Width` also moves `Left`.
 - A label PowerPoint does not draw returns `Left = NaN`; `Point.Left/Top` return nonsense.
+- `TextFrame2.AutoSize` reports 1 even for a label resized by hand; only assigning `AutoSize = 1` again
+  resets the size.
+- The text frame of a label can be empty (length 0): its font then reports 18 pt while the label is drawn with
+  `DataLabel.Font`.
+- `Axis.ScaleType` fails on a date axis and `Axis.CategoryType` on a value axis.
 - After changing an axis through the object model, labels keep returning their old `Left/Top`; the real
   position shows only after saving and reopening.
 - A label with `c15:xForSave val="1"` is drawn in its default position.
